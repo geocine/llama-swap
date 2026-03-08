@@ -11,6 +11,17 @@ macros:
     -ngl 99 -np 1 -c 262144 -fa on
     --cache-type-k q4_0 --cache-type-v q4_0
     --top-k 20 --repeat_penalty 1.0
+  QWEN35_35B_A3B_COMMON_ARGS: >-
+    -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL.gguf
+    -ngl 999
+    --fit off
+    -fa on
+    -ctk q4_0
+    -ctv q4_0
+    -b 2048
+    -ub 512
+    --parallel 1
+    --no-mmap
 
 models:
   qwen35-27b-unsloth:
@@ -69,3 +80,23 @@ models:
       ${COMMON_ARGS}
       --temp 0.7 --top-p 0.8 --presence_penalty 1.5
       --chat-template-kwargs '{"enable_thinking":false}'
+
+  qwen35-35b-a3b-262k:
+    cmd: >
+      ${LLAMA_SERVER}
+      ${QWEN35_35B_A3B_COMMON_ARGS}
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      -c 262144
+
+  qwen35-35b-a3b-1m:
+    cmd: >
+      ${LLAMA_SERVER}
+      ${QWEN35_35B_A3B_COMMON_ARGS}
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      -c 1048576
+      --override-kv "qwen35moe.context_length=int:1048576"
+      --rope-scaling yarn
+      --rope-scale 4.0
+      --yarn-orig-ctx 262144
