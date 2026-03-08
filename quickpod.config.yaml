@@ -1,0 +1,71 @@
+healthCheckTimeout: 300
+logRequests: true
+logToStdout: both
+startPort: 9000
+apiKeys:
+  - "${env.LS_KEY}"
+
+macros:
+  LLAMA_SERVER: /app/llama-server-progress
+  COMMON_ARGS: >-
+    -ngl 99 -np 1 -c 262144 -fa on
+    --cache-type-k q4_0 --cache-type-v q4_0
+    --top-k 20 --repeat_penalty 1.0
+
+models:
+  qwen35-27b-unsloth:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-27B-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${COMMON_ARGS}
+      --temp 0.6 --top-p 0.95 --min-p 0.00 --presence_penalty 0.0
+
+  qwen35-27b-claude46-reasoning:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${COMMON_ARGS}
+      --temp 0.6 --top-p 0.95 --min-p 0.00 --presence_penalty 0.0
+
+  qwen35-27b-hauhau-uncensored:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${COMMON_ARGS}
+      --temp 0.6 --top-p 0.95 --presence_penalty 0.0
+
+  qwen35-27b-unsloth-no-thinking:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-27B-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${COMMON_ARGS}
+      --temp 1.0 --top-p 0.95 --min-p 0.00 --presence_penalty 1.5
+      --chat-template-kwargs '{"enable_thinking":false}'
+
+  qwen35-27b-claude46-no-thinking:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${COMMON_ARGS}
+      --temp 1.0 --top-p 0.95 --min-p 0.00 --presence_penalty 1.5
+      --chat-template-kwargs '{"enable_thinking":false}'
+
+  qwen35-27b-hauhau-uncensored-no-thinking:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${COMMON_ARGS}
+      --temp 0.7 --top-p 0.8 --presence_penalty 1.5
+      --chat-template-kwargs '{"enable_thinking":false}'
