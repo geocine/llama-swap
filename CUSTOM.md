@@ -175,14 +175,19 @@ docker run --rm --gpus all -p 8080:8080 `
 
 ## Model IDs in this fork
 
-- `qwen35-27b-unsloth`
-- `qwen35-27b-claude46-reasoning`
-- `qwen35-27b-hauhau-uncensored`
-- `qwen35-27b-unsloth-no-thinking`
-- `qwen35-27b-claude46-no-thinking`
-- `qwen35-27b-hauhau-uncensored-no-thinking`
+- `qwen35-27b`
+- `qwen35-27b-kv8`
+- `qwen35-27b-opus46`
+- `qwen35-27b-opus46-kv8`
+- `qwen35-27b-uncensored`
+- `qwen35-27b-fast`
+- `qwen35-27b-opus46-fast`
+- `qwen35-27b-uncensored-fast`
 - `qwen35-35b-a3b-262k`
 - `qwen35-35b-a3b-1m`
+- `qwen35-35b-a3b-iq4nl`
+- `qwen35-35b-a3b-iq4nl-kv8`
+- `qwen35-35b-a3b-iq4nl-fast`
 
 ## Smoke tests
 
@@ -198,7 +203,7 @@ curl http://<host>:8675/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "x-api-key: replace-me" \
   -d '{
-    "model": "qwen35-27b-unsloth",
+    "model": "qwen35-27b",
     "messages": [
       {"role": "user", "content": "Write a haiku about hot-swapping models."}
     ]
@@ -212,7 +217,7 @@ curl http://<host>:8675/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: replace-me" \
   -d '{
-    "model": "qwen35-27b-claude46-reasoning",
+    "model": "qwen35-27b-opus46",
     "max_tokens": 256,
     "messages": [
       {"role": "user", "content": "Summarize why llama-swap is useful."}

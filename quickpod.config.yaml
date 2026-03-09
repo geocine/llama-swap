@@ -24,7 +24,7 @@ macros:
     --no-mmap
 
 models:
-  qwen35-27b-unsloth:
+  qwen35-27b:
     cmd: >
       ${LLAMA_SERVER}
       -hf unsloth/Qwen3.5-27B-GGUF:Q4_K_M
@@ -33,7 +33,26 @@ models:
       ${COMMON_ARGS}
       --temp 0.6 --top-p 0.95 --min-p 0.00 --presence_penalty 0.0
 
-  qwen35-27b-claude46-reasoning:
+  qwen35-27b-kv8:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-27B-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      -ngl 99
+      -np 1
+      -c 262144
+      -fa on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --top-k 20
+      --repeat_penalty 1.0
+      --temp 0.6
+      --top-p 0.95
+      --min-p 0.00
+      --presence_penalty 0.0
+
+  qwen35-27b-opus46:
     cmd: >
       ${LLAMA_SERVER}
       -hf Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M
@@ -42,7 +61,26 @@ models:
       ${COMMON_ARGS}
       --temp 0.6 --top-p 0.95 --min-p 0.00 --presence_penalty 0.0
 
-  qwen35-27b-hauhau-uncensored:
+  qwen35-27b-opus46-kv8:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      -ngl 99
+      -np 1
+      -c 262144
+      -fa on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --top-k 20
+      --repeat_penalty 1.0
+      --temp 0.6
+      --top-p 0.95
+      --min-p 0.00
+      --presence_penalty 0.0
+
+  qwen35-27b-uncensored:
     cmd: >
       ${LLAMA_SERVER}
       -hf HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive:Q4_K_M
@@ -51,7 +89,7 @@ models:
       ${COMMON_ARGS}
       --temp 0.6 --top-p 0.95 --presence_penalty 0.0
 
-  qwen35-27b-unsloth-no-thinking:
+  qwen35-27b-fast:
     cmd: >
       ${LLAMA_SERVER}
       -hf unsloth/Qwen3.5-27B-GGUF:Q4_K_M
@@ -61,7 +99,7 @@ models:
       --temp 1.0 --top-p 0.95 --min-p 0.00 --presence_penalty 1.5
       --chat-template-kwargs '{"enable_thinking":false}'
 
-  qwen35-27b-claude46-no-thinking:
+  qwen35-27b-opus46-fast:
     cmd: >
       ${LLAMA_SERVER}
       -hf Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M
@@ -71,7 +109,7 @@ models:
       --temp 1.0 --top-p 0.95 --min-p 0.00 --presence_penalty 1.5
       --chat-template-kwargs '{"enable_thinking":false}'
 
-  qwen35-27b-hauhau-uncensored-no-thinking:
+  qwen35-27b-uncensored-fast:
     cmd: >
       ${LLAMA_SERVER}
       -hf HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive:Q4_K_M
@@ -100,3 +138,61 @@ models:
       --rope-scaling yarn
       --rope-scale 4.0
       --yarn-orig-ctx 262144
+
+  qwen35-35b-a3b-iq4nl:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ4_NL
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      -np 1
+      -ngl 99
+      -c 262144
+      -fa on
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --temp 0.6
+      --top-p 0.95
+      --top-k 20
+      --min-p 0.00
+      --presence_penalty 0.0
+      --repeat_penalty 1.0
+
+  qwen35-35b-a3b-iq4nl-kv8:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ4_NL
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      -np 1
+      -ngl 99
+      -c 262144
+      -fa on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --temp 0.6
+      --top-p 0.95
+      --top-k 20
+      --min-p 0.00
+      --presence_penalty 0.0
+      --repeat_penalty 1.0
+
+  qwen35-35b-a3b-iq4nl-fast:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ4_NL
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      -np 1
+      -ngl 99
+      -c 262144
+      -fa on
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --temp 0.6
+      --top-p 0.95
+      --top-k 20
+      --min-p 0.00
+      --presence_penalty 0.0
+      --repeat_penalty 1.0
+      --chat-template-kwargs '{"enable_thinking":false}'
