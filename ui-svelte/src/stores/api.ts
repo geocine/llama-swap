@@ -1,5 +1,6 @@
 import { writable } from "svelte/store";
 import type { Model, Metrics, VersionInfo, LogData, APIEventEnvelope, ReqRespCapture, InFlightStats } from "../lib/types";
+import { handleUnauthorized } from "./auth";
 import { connectionState } from "./theme";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; /* 100KB of log data */
@@ -17,6 +18,14 @@ export const versionInfo = writable<VersionInfo>({
 });
 
 let apiEventSource: EventSource | null = null;
+
+async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  if (response.status === 401) {
+    handleUnauthorized();
+  }
+  return response;
+}
 
 function appendLog(newData: string, store: typeof proxyLogs | typeof upstreamLogs): void {
   store.update((prev) => {
@@ -113,7 +122,7 @@ export function enableAPIEvents(enabled: boolean): void {
 connectionState.subscribe(async (status) => {
   if (status === "connected") {
     try {
-      const response = await fetch("/api/version");
+      const response = await apiFetch("/api/version");
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -127,7 +136,7 @@ connectionState.subscribe(async (status) => {
 
 export async function listModels(): Promise<Model[]> {
   try {
-    const response = await fetch("/api/models/");
+    const response = await apiFetch("/api/models/");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -141,7 +150,7 @@ export async function listModels(): Promise<Model[]> {
 
 export async function unloadAllModels(): Promise<void> {
   try {
-    const response = await fetch(`/api/models/unload`, {
+    const response = await apiFetch(`/api/models/unload`, {
       method: "POST",
     });
     if (!response.ok) {
@@ -155,7 +164,7 @@ export async function unloadAllModels(): Promise<void> {
 
 export async function unloadSingleModel(model: string): Promise<void> {
   try {
-    const response = await fetch(`/api/models/unload/${model}`, {
+    const response = await apiFetch(`/api/models/unload/${model}`, {
       method: "POST",
     });
     if (!response.ok) {
@@ -169,7 +178,7 @@ export async function unloadSingleModel(model: string): Promise<void> {
 
 export async function loadModel(model: string): Promise<void> {
   try {
-    const response = await fetch(`/upstream/${model}/`, {
+    const response = await apiFetch(`/upstream/${model}/`, {
       method: "GET",
     });
     if (!response.ok) {
@@ -183,7 +192,7 @@ export async function loadModel(model: string): Promise<void> {
 
 export async function getCapture(id: number): Promise<ReqRespCapture | null> {
   try {
-    const response = await fetch(`/api/captures/${id}`);
+    const response = await apiFetch(`/api/captures/${id}`);
     if (response.status === 404) {
       return null;
     }

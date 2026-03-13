@@ -1,5 +1,6 @@
 <script lang="ts">
   import { link } from "svelte-spa-router";
+  import { authRequired, isAuthenticated, logout } from "../stores/auth";
   import { screenWidth, toggleTheme, isDarkMode, appTitle, isNarrow } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
@@ -26,6 +27,10 @@
 
   function isActive(path: string, current: string): boolean {
     return path === "/" ? current === "/" : current.startsWith(path);
+  }
+
+  function handleLogout(): void {
+    void logout();
   }
 
 </script>
@@ -95,6 +100,15 @@
         </svg>
       {/if}
     </button>
+    {#if $authRequired && $isAuthenticated}
+      <button
+        class="text-gray-600 hover:text-black dark:text-gray-300 dark:hover:text-gray-100 p-1 whitespace-nowrap"
+        onclick={handleLogout}
+        title="Sign out"
+      >
+        Logout
+      </button>
+    {/if}
     <ConnectionStatus />
   </menu>
 </header>

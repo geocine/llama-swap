@@ -1328,8 +1328,7 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 	defer proxy.StopProcesses(StopImmediately)
 
 	t.Run("valid key in x-api-key header", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		req.Header.Set("x-api-key", "valid-key-1")
 		w := CreateTestResponseRecorder()
 
@@ -1338,8 +1337,7 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 	})
 
 	t.Run("valid key in Authorization Bearer header", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		req.Header.Set("Authorization", "Bearer valid-key-2")
 		w := CreateTestResponseRecorder()
 
@@ -1348,8 +1346,7 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 	})
 
 	t.Run("both headers with matching keys", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		req.Header.Set("x-api-key", "valid-key-1")
 		req.Header.Set("Authorization", "Bearer valid-key-1")
 		w := CreateTestResponseRecorder()
@@ -1359,8 +1356,7 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 	})
 
 	t.Run("invalid key returns 401", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		req.Header.Set("x-api-key", "invalid-key")
 		w := CreateTestResponseRecorder()
 
@@ -1370,18 +1366,26 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 	})
 
 	t.Run("missing key returns 401", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		w := CreateTestResponseRecorder()
 
 		proxy.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
-	t.Run("valid key in Basic Auth header", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
-		// Basic Auth: base64("anyuser:valid-key-1")
+	t.Run("valid key in Basic Auth header is ignored on UI API routes", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/version", nil)
+		credentials := base64.StdEncoding.EncodeToString([]byte("anyuser:valid-key-1"))
+		req.Header.Set("Authorization", "Basic "+credentials)
+		w := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.Contains(t, w.Body.String(), "unauthorized")
+	})
+
+	t.Run("valid key in Basic Auth header still works on inference API routes", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
 		credentials := base64.StdEncoding.EncodeToString([]byte("anyuser:valid-key-1"))
 		req.Header.Set("Authorization", "Basic "+credentials)
 		w := CreateTestResponseRecorder()
@@ -1390,9 +1394,8 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
-	t.Run("invalid key in Basic Auth header returns 401", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+	t.Run("invalid key in Basic Auth header returns 401 on inference API routes", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
 		credentials := base64.StdEncoding.EncodeToString([]byte("anyuser:wrong-key"))
 		req.Header.Set("Authorization", "Basic "+credentials)
 		w := CreateTestResponseRecorder()
@@ -1403,8 +1406,7 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 	})
 
 	t.Run("x-api-key and Basic Auth with matching keys", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		req.Header.Set("x-api-key", "valid-key-1")
 		credentials := base64.StdEncoding.EncodeToString([]byte("user:valid-key-1"))
 		req.Header.Set("Authorization", "Basic "+credentials)
@@ -1414,14 +1416,107 @@ func TestProxyManager_APIKeyAuth(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
-	t.Run("401 response includes WWW-Authenticate header", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+	t.Run("401 response omits WWW-Authenticate header", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		w := CreateTestResponseRecorder()
 
 		proxy.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
-		assert.Equal(t, `Basic realm="llama-swap"`, w.Header().Get("WWW-Authenticate"))
+		assert.Empty(t, w.Header().Get("WWW-Authenticate"))
+	})
+}
+
+func TestProxyManager_APIKeyAuth_UILoginFlow(t *testing.T) {
+	testConfig := config.AddDefaultGroupToConfig(config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": getTestSimpleResponderConfig("model1"),
+		},
+		RequiredAPIKeys: []string{"valid-key-1"},
+		LogLevel:        "error",
+	})
+
+	proxy := New(testConfig)
+	defer proxy.StopProcesses(StopImmediately)
+
+	t.Run("session reports unauthenticated without cookie", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/auth/session", nil)
+		w := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response authSessionResponse
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.True(t, response.AuthRequired)
+		assert.False(t, response.Authenticated)
+	})
+
+	t.Run("session ignores Basic Auth header", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/auth/session", nil)
+		credentials := base64.StdEncoding.EncodeToString([]byte("anyuser:valid-key-1"))
+		req.Header.Set("Authorization", "Basic "+credentials)
+		w := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response authSessionResponse
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.True(t, response.AuthRequired)
+		assert.False(t, response.Authenticated)
+	})
+
+	t.Run("login sets cookie and cookie authenticates protected routes", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBufferString(`{"password":"valid-key-1"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		cookies := w.Result().Cookies()
+		var authCookie *http.Cookie
+		for _, cookie := range cookies {
+			if cookie.Name == uiAuthCookieName {
+				authCookie = cookie
+				break
+			}
+		}
+
+		if !assert.NotNil(t, authCookie) {
+			return
+		}
+		assert.NotEmpty(t, authCookie.Value)
+		assert.True(t, authCookie.HttpOnly)
+
+		sessionReq := httptest.NewRequest("GET", "/api/auth/session", nil)
+		sessionReq.AddCookie(authCookie)
+		sessionResp := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(sessionResp, sessionReq)
+		assert.Equal(t, http.StatusOK, sessionResp.Code)
+
+		var session authSessionResponse
+		assert.NoError(t, json.Unmarshal(sessionResp.Body.Bytes(), &session))
+		assert.True(t, session.AuthRequired)
+		assert.True(t, session.Authenticated)
+
+		protectedReq := httptest.NewRequest("GET", "/api/version", nil)
+		protectedReq.AddCookie(authCookie)
+		protectedResp := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(protectedResp, protectedReq)
+		assert.Equal(t, http.StatusOK, protectedResp.Code)
+	})
+
+	t.Run("logout clears cookie", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		w := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Header().Get("Set-Cookie"), uiAuthCookieName+"=")
 	})
 }
 
@@ -1439,8 +1534,7 @@ func TestProxyManager_APIKeyAuth_Disabled(t *testing.T) {
 	defer proxy.StopProcesses(StopImmediately)
 
 	t.Run("requests pass without API key when not configured", func(t *testing.T) {
-		reqBody := `{"model":"model1"}`
-		req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("GET", "/api/version", nil)
 		w := CreateTestResponseRecorder()
 
 		proxy.ServeHTTP(w, req)

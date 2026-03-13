@@ -104,13 +104,13 @@ Use this Dockerfile if you need forked backend changes to actually ship in the i
 Local build using upstream binary:
 
 ```shell
-docker build -f Dockerfile.quickpod -t geocine/llama-swap:qwen35 .
+docker build -f Dockerfile.quickpod -t geocine/llama-swap:qwen35-upstream .
 ```
 
 Local build from this fork's source:
 
 ```shell
-docker build -f Dockerfile.source.quickpod -t geocine/llama-swap:qwen35-source .
+docker build -f Dockerfile.source.quickpod -t geocine/llama-swap:qwen35 .
 ```
 
 Build and push in one step from this fork's source:
@@ -118,7 +118,7 @@ Build and push in one step from this fork's source:
 ```shell
 docker buildx build --platform linux/amd64 \
   -f Dockerfile.source.quickpod \
-  -t geocine/llama-swap:qwen35-source \
+  -t geocine/llama-swap:qwen35 \
   --push .
 ```
 
@@ -126,13 +126,13 @@ docker buildx build --platform linux/amd64 \
 
 ```shell
 docker login
-docker push geocine/llama-swap:qwen35-source
+docker push geocine/llama-swap:qwen35
 ```
 
 ## QuickPod settings for this fork
 
 - Template Type: `GPU`
-- Docker Image Path: `geocine/llama-swap:qwen35-source`
+- Docker Image Path: `geocine/llama-swap:qwen35`
 - Docker Options: `-p 8675:8080`
 - Disk Space: `150 GB` is a reasonable starting point
 
@@ -157,17 +157,19 @@ Use **PowerShell**, not Git Bash, because Git Bash can rewrite container paths l
 docker run --rm --gpus all -p 8080:8080 `
   -e LS_KEY=replace-me `
   -e LLAMA_CACHE=/cache/llama `
-  -v "C:\Users\Aivan\AppData\Local\llama.cpp:/cache/llama" `
-  geocine/llama-swap:qwen35-source
+  -v "$env:USERPROFILE\AppData\Local\llama.cpp:/cache/llama" `
+  -v "${PWD}\models:/models" `
+  geocine/llama-swap:qwen35
 ```
+
+For the current `quickpod.config.yaml`, the `/cache/llama` mount is the important one because the configured models resolve through the llama.cpp cache. The `/models` mount is still useful for local configs that reference files under `/models`.
 
 ## Auth added by this fork
 
 - API routes are protected
-- the UI calls protected `/api/*` endpoints, so browsers will typically prompt for credentials when using the UI
-- browser login uses HTTP Basic Auth
-  - username: anything
-  - password: `LS_KEY`
+- the UI now shows a password form instead of triggering a browser Basic Auth prompt
+- the UI password is the same value configured in `LS_KEY`
+- successful UI login sets a browser session cookie used by `/api/*`, `/v1/*`, and `/upstream/*`
 - API clients can send:
   - `x-api-key: <LS_KEY>`
   - `Authorization: Bearer <LS_KEY>`
