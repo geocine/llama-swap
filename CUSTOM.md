@@ -14,6 +14,7 @@ This fork adds a deployment flow aimed at hosted GPU containers:
 - a fork-specific image build using `Dockerfile.quickpod`
 - a source-built fork image using `Dockerfile.source.quickpod`
 - a baked multi-model config in `quickpod.config.yaml`
+- optional startup config override from a raw GitHub Gist URL
 - API protection through the `LS_KEY` environment variable
 - a lightweight download-progress wrapper for `llama-server`
 - docs for local Windows testing and hosted deployment
@@ -25,6 +26,7 @@ These changes are fork-specific and are not describing upstream `llama-swap` in 
 - `Dockerfile.quickpod`
 - `Dockerfile.source.quickpod`
 - `quickpod.config.yaml`
+- `docker/quickpod-entrypoint.sh`
 - `docker/llama-server-progress.sh`
 
 ## Which Dockerfile to use
@@ -67,19 +69,23 @@ That base image already contains:
 
 Then this build only adds two files:
 
-1. `docker/llama-server-progress.sh` copied to `/app/llama-server-progress`
+1. `docker/quickpod-entrypoint.sh` copied to `/app/quickpod-entrypoint`
+   - this starts `llama-swap`
+   - it uses `/app/config.yaml` by default
+   - if `LLAMA_SWAP_CONFIG_URL` is set, it downloads that URL to `/tmp/llama-swap.config.yaml` and uses it instead
+2. `docker/llama-server-progress.sh` copied to `/app/llama-server-progress`
    - this wraps `llama-server`
-   - it logs download progress by watching `.downloadInProgress` files in the llama.cpp cache
-2. `quickpod.config.yaml` copied to `/app/config.yaml`
+   - it logs download progress for `.downloadInProgress` files created by the current `llama-server` process
+3. `quickpod.config.yaml` copied to `/app/config.yaml`
    - this becomes the active `llama-swap` config used at container startup
 
-The base image already has its entrypoint set to start:
+The image entrypoint starts:
 
 ```shell
-/app/llama-swap -config /app/config.yaml
+/app/quickpod-entrypoint
 ```
 
-So after the two `COPY` steps, the container is ready. There is no extra compile step in `Dockerfile.quickpod`.
+So after the three `COPY` steps, the container is ready. There is no extra compile step in `Dockerfile.quickpod`.
 
 ## How `Dockerfile.source.quickpod` is built
 
@@ -94,10 +100,35 @@ That means:
 - `/app/llama-server` comes directly from the upstream `llama.cpp` CUDA image
 - `/app/llama-swap` comes from this fork
 - `/app/config.yaml` comes from `quickpod.config.yaml`
+- `/app/quickpod-entrypoint` comes from this fork
 - `/app/llama-server-progress` comes from this fork
 - the final runtime image recreates the upstream `/app` user, working directory, `PATH`, healthcheck, and entrypoint pattern
 
 Use this Dockerfile if you need forked backend changes to actually ship in the image.
+
+## Config override from GitHub Gist
+
+The image always includes `quickpod.config.yaml` at `/app/config.yaml` as a fallback.
+
+To override it at startup, create a Gist containing your config YAML, copy the raw file URL, and set:
+
+```shell
+LLAMA_SWAP_CONFIG_URL=https://gist.githubusercontent.com/<user>/<gist-id>/raw/<file>
+```
+
+For a private Gist, also set:
+
+```shell
+GITHUB_TOKEN=<token-with-gist-access>
+```
+
+If `LLAMA_SWAP_CONFIG_URL` is set, the container downloads that file on every start and runs:
+
+```shell
+/app/llama-swap -config /tmp/llama-swap.config.yaml
+```
+
+If the download fails, startup fails instead of silently falling back to the baked config.
 
 ## Exact build command
 
@@ -140,6 +171,10 @@ docker push geocine/llama-swap:qwen35
 
 - `LS_KEY` required
   - protects API routes and the UI's API calls
+- `LLAMA_SWAP_CONFIG_URL` optional
+  - raw URL to a replacement config YAML, for example a GitHub Gist raw URL
+- `GITHUB_TOKEN` optional
+  - used when `LLAMA_SWAP_CONFIG_URL` points at a private Gist
 - `HF_TOKEN` optional
   - needed only if a Hugging Face model requires auth
 - `CUDA_VISIBLE_DEVICES=0` optional
@@ -156,6 +191,7 @@ Use **PowerShell**, not Git Bash, because Git Bash can rewrite container paths l
 ```powershell
 docker run --rm --gpus all -p 8080:8080 `
   -e LS_KEY=replace-me `
+  -e LLAMA_SWAP_CONFIG_URL=https://gist.githubusercontent.com/<user>/<gist-id>/raw/<file> `
   -e LLAMA_CACHE=/cache/llama `
   -v "$env:USERPROFILE\AppData\Local\llama.cpp:/cache/llama" `
   -v "${PWD}\models:/models" `

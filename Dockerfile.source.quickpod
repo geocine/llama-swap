@@ -58,8 +58,9 @@ WORKDIR /app
 ENV PATH="/app:${PATH}"
 
 COPY --from=go-builder --chown=$UID:$GID /out/llama-swap /app/llama-swap
+COPY --chmod=755 --chown=$UID:$GID docker/quickpod-entrypoint.sh /app/quickpod-entrypoint
 COPY --chmod=755 --chown=$UID:$GID docker/llama-server-progress.sh /app/llama-server-progress
 COPY --chown=$UID:$GID quickpod.config.yaml /app/config.yaml
 
 HEALTHCHECK CMD curl -f http://localhost:8080/ || exit 1
-ENTRYPOINT [ "/app/llama-swap", "-config", "/app/config.yaml" ]
+ENTRYPOINT [ "/app/quickpod-entrypoint" ]

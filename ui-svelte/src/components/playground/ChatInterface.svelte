@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { models } from "../../stores/api";
+  import { models, unloadSingleModel } from "../../stores/api";
   import { persistentStore } from "../../stores/persistent";
   import { streamChatCompletion } from "../../lib/chatApi";
+  import { getChatModelLoadingState } from "../../lib/modelLoading";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import type { ChatMessage, ContentPart } from "../../lib/types";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import ModelSelector from "./ModelSelector.svelte";
-  import ExpandableTextarea from "./ExpandableTextarea.svelte";
+  import { ImageIcon, Plus, Send, Settings, Square, X } from "lucide-svelte";
 
   const selectedModelStore = persistentStore<string>("playground-selected-model", "");
   const systemPromptStore = persistentStore<string>("playground-system-prompt", "");
@@ -27,34 +28,79 @@
   let isReasoning = $state(false);
   let reasoningStartTime = $state<number>(0);
   let abortController = $state<AbortController | null>(null);
-  let messagesContainer: HTMLDivElement | undefined = $state();
+  let scrollContainer: HTMLDivElement | undefined = $state();
+  let textareaEl: HTMLTextAreaElement | undefined = $state();
+  let composerWrap: HTMLDivElement | undefined = $state();
   let showSettings = $state(false);
   let attachedImages = $state<string[]>([]);
   let fileInput = $state<HTMLInputElement | null>(null);
   let imageError = $state<string | null>(null);
+  let requestStartedAt = $state(0);
+  let hasReceivedOutput = $state(false);
+  let now = $state(Date.now());
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
   let userScrolledUp = $state(false);
+  let isEmpty = $derived(messages.length === 0);
+  let modelLoadingState = $derived(
+    getChatModelLoadingState($models, $selectedModelStore, isStreaming, hasReceivedOutput, requestStartedAt, now)
+  );
 
   $effect(() => {
     playgroundStores.chatStreaming.set(isStreaming);
   });
 
-  function handleMessagesScroll() {
-    if (!messagesContainer) return;
-    const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
+  $effect(() => {
+    if (!isStreaming) return;
+    now = Date.now();
+    const timer = setInterval(() => {
+      now = Date.now();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
+
+  function handleScroll() {
+    if (!scrollContainer) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
     // Consider "at bottom" if within 40px of the bottom
     userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
   }
 
   // Auto-scroll when messages change — skip if user scrolled up
   $effect(() => {
-    if (messages.length > 0 && messagesContainer && !userScrolledUp) {
-      messagesContainer.scrollTo({
-        top: messagesContainer.scrollHeight,
+    if (messages.length > 0 && scrollContainer && !userScrolledUp) {
+      scrollContainer.scrollTo({
+        top: scrollContainer.scrollHeight,
         behavior: isStreaming ? "instant" : "smooth",
       });
     }
+  });
+
+  // Auto-grow textarea (capped — overflow scrolls inside the textarea)
+  const TEXTAREA_MAX_PX = 200;
+  $effect(() => {
+    void userInput;
+    if (textareaEl) {
+      textareaEl.style.height = "auto";
+      const next = Math.min(textareaEl.scrollHeight, TEXTAREA_MAX_PX);
+      textareaEl.style.height = `${next}px`;
+      textareaEl.style.overflowY = textareaEl.scrollHeight > TEXTAREA_MAX_PX ? "auto" : "hidden";
+    }
+  });
+
+  // Keep the message bottom padding in sync with the composer's actual height
+  // so the last message is never occluded as the textarea grows or images are added
+  $effect(() => {
+    if (!composerWrap || !scrollContainer) return;
+    const target = scrollContainer;
+    const update = () => {
+      if (!composerWrap) return;
+      target.style.setProperty("--composer-height", `${composerWrap.offsetHeight}px`);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(composerWrap);
+    return () => ro.disconnect();
   });
 
   // Persist messages to localStorage (throttled to once per 2s)
@@ -107,6 +153,11 @@
 
   function cancelStreaming() {
     abortController?.abort();
+    if (modelLoadingState?.state === "starting" || modelLoadingState?.state === "stopped") {
+      void unloadSingleModel(modelLoadingState.modelId).catch((error) => {
+        console.error("Failed to stop loading model:", error);
+      });
+    }
   }
 
   function newChat() {
@@ -128,6 +179,9 @@
     isStreaming = true;
     isReasoning = false;
     reasoningStartTime = 0;
+    requestStartedAt = Date.now();
+    now = requestStartedAt;
+    hasReceivedOutput = false;
     abortController = new AbortController();
 
     try {
@@ -136,7 +190,7 @@
       if ($systemPromptStore.trim()) {
         apiMessages.push({ role: "system", content: $systemPromptStore.trim() });
       }
-      apiMessages.push(...messages.slice(0, -1)); // Add all messages except the empty assistant one
+      apiMessages.push(...messages.slice(0, -1));
 
       const stream = streamChatCompletion(
         $selectedModelStore,
@@ -150,6 +204,7 @@
 
         // Handle reasoning content
         if (chunk.reasoning_content) {
+          hasReceivedOutput = true;
           // Start timing on first reasoning content
           if (!isReasoning) {
             isReasoning = true;
@@ -166,6 +221,7 @@
 
         // Handle regular content - end reasoning phase when we get content
         if (chunk.content) {
+          hasReceivedOutput = true;
           if (isReasoning) {
             // Calculate reasoning time
             const reasoningTimeMs = Date.now() - reasoningStartTime;
@@ -211,6 +267,8 @@
     } finally {
       isStreaming = false;
       isReasoning = false;
+      requestStartedAt = 0;
+      hasReceivedOutput = false;
       abortController = null;
     }
   }
@@ -235,7 +293,7 @@
   }
 
   const ACCEPTED_IMAGE_FORMATS = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-  const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
+  const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
   const MAX_IMAGES_PER_MESSAGE = 5;
 
   function validateImageFile(file: File): string | null {
@@ -296,34 +354,48 @@
   }
 </script>
 
-<div class="flex flex-col h-full">
-  <!-- Model selector and controls -->
-  <div class="shrink-0 flex flex-wrap gap-2 mb-4">
-    <ModelSelector bind:value={$selectedModelStore} placeholder="Select a model..." disabled={isStreaming} />
-    <div class="flex gap-2">
-      <button
-        class="btn"
-        onclick={() => (showSettings = !showSettings)}
-        title="Settings"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
-          <path fill-rule="evenodd" d="M8.34 1.804A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.804l.295 1.473c.497.144.971.342 1.416.587l1.25-.834a1 1 0 0 1 1.262.125l.962.962a1 1 0 0 1 .125 1.262l-.834 1.25c.245.445.443.919.587 1.416l1.473.295a1 1 0 0 1 .804.98v1.36a1 1 0 0 1-.804.98l-1.473.295a6.95 6.95 0 0 1-.587 1.416l.834 1.25a1 1 0 0 1-.125 1.262l-.962.962a1 1 0 0 1-1.262.125l-1.25-.834a6.953 6.953 0 0 1-1.416.587l-.295 1.473a1 1 0 0 1-.98.804H9.32a1 1 0 0 1-.98-.804l-.295-1.473a6.957 6.957 0 0 1-1.416-.587l-1.25.834a1 1 0 0 1-1.262-.125l-.962-.962a1 1 0 0 1-.125-1.262l.834-1.25a6.957 6.957 0 0 1-.587-1.416l-1.473-.295A1 1 0 0 1 1 10.68V9.32a1 1 0 0 1 .804-.98l1.473-.295c.144-.497.342-.971.587-1.416l-.834-1.25a1 1 0 0 1 .125-1.262l.962-.962A1 1 0 0 1 5.38 3.03l1.25.834a6.957 6.957 0 0 1 1.416-.587l.294-1.473ZM13 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" clip-rule="evenodd" />
-        </svg>
-      </button>
-      <button class="btn" onclick={newChat} disabled={messages.length === 0 && !isStreaming}>
-        New Chat
-      </button>
+<div class="relative flex h-full min-h-0 flex-col">
+  <!-- Top toolbar: model + actions -->
+  <div class="shrink-0 px-1 pb-2 pt-2">
+    <div class="mx-auto flex max-w-[48rem] items-center gap-2">
+      <ModelSelector bind:value={$selectedModelStore} placeholder="Select a model..." disabled={isStreaming} />
+
+      <div class="ml-auto flex items-center gap-2">
+        <button
+          class="btn p-2"
+          class:active={showSettings}
+          onclick={() => (showSettings = !showSettings)}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <Settings class="h-4 w-4" />
+        </button>
+        <button
+          class="btn p-2"
+          onclick={newChat}
+          disabled={messages.length === 0 && !isStreaming}
+          title="New chat"
+          aria-label="New chat"
+        >
+          <Plus class="h-4 w-4" />
+        </button>
+      </div>
     </div>
   </div>
 
-  <!-- Settings panel -->
+  <!-- Settings drawer -->
   {#if showSettings}
-    <div class="shrink-0 mb-4 p-4 bg-surface border border-gray-200 dark:border-white/10 rounded">
+    <div class="mx-auto mb-3 w-full max-w-[48rem] shrink-0 rounded-sm border border-border bg-surface p-4">
       <div class="mb-4">
-        <label class="block text-sm font-medium mb-1" for="system-prompt">System Prompt</label>
+        <label
+          class="mb-2 block text-[10px] font-bold uppercase tracking-widest text-txtsecondary"
+          for="system-prompt"
+        >
+          System Prompt
+        </label>
         <textarea
           id="system-prompt"
-          class="w-full px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-card focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+          class="w-full resize-none rounded-sm border border-border bg-black px-3 py-2 text-sm text-txtmain placeholder-zinc-700 outline-none transition-colors duration-150 focus:border-white"
           placeholder="You are a helpful assistant..."
           rows="3"
           bind:value={$systemPromptStore}
@@ -331,8 +403,14 @@
         ></textarea>
       </div>
       <div>
-        <label class="block text-sm font-medium mb-1" for="temperature">
-          Temperature: {$temperatureStore.toFixed(2)}
+        <label
+          class="mb-2 block text-[10px] font-bold uppercase tracking-widest text-txtsecondary"
+          for="temperature"
+        >
+          Temperature
+          <span class="ml-2 font-mono normal-case tracking-normal text-txtmain">
+            {$temperatureStore.toFixed(2)}
+          </span>
         </label>
         <input
           id="temperature"
@@ -340,35 +418,49 @@
           min="0"
           max="2"
           step="0.05"
-          class="w-full"
+          class="w-full accent-white"
           bind:value={$temperatureStore}
           disabled={isStreaming}
         />
-        <div class="flex justify-between text-xs text-txtsecondary mt-1">
-          <span>Precise (0)</span>
-          <span>Creative (2)</span>
+        <div class="mt-1 flex justify-between font-mono text-[10px] uppercase tracking-widest text-txtsecondary">
+          <span>Precise · 0</span>
+          <span>Creative · 2</span>
         </div>
       </div>
     </div>
   {/if}
 
-  <!-- Empty state for no models configured -->
   {#if !hasModels}
-    <div class="flex-1 flex items-center justify-center text-txtsecondary">
-      <p>No models configured. Add models to your configuration to start chatting.</p>
+    <div class="flex flex-1 items-center justify-center text-center text-txtsecondary">
+      <div>
+        <p class="text-xs font-bold uppercase tracking-widest">No models configured</p>
+        <p class="mt-2 text-sm">Add models to your configuration to start chatting.</p>
+      </div>
+    </div>
+  {:else if isEmpty}
+    <!-- Empty / welcome state: centered headline + composer -->
+    <div class="flex flex-1 items-center justify-center px-1 pb-12">
+      <div class="w-full max-w-[48rem]">
+        <div class="mb-10 text-center">
+          <h1 class="mb-3 text-3xl font-bold tracking-tight text-txtmain md:text-4xl">
+            What can I help with?
+          </h1>
+          <p class="font-mono text-[11px] uppercase tracking-widest text-txtsecondary">
+            Send a message · Shift Enter for newline · attach images
+          </p>
+        </div>
+
+        {@render composer()}
+      </div>
     </div>
   {:else}
-    <!-- Messages area -->
+    <!-- Conversation state: scrolling messages + sticky composer -->
     <div
-      class="flex-1 overflow-y-auto mb-4 px-2"
-      bind:this={messagesContainer}
-      onscroll={handleMessagesScroll}
+      bind:this={scrollContainer}
+      onscroll={handleScroll}
+      class="min-h-0 flex-1 overflow-y-auto px-1"
     >
-      {#if messages.length === 0}
-        <div class="h-full flex items-center justify-center text-txtsecondary">
-          <p>Start a conversation by typing a message below.</p>
-        </div>
-      {:else}
+      <div class="mx-auto w-full max-w-[48rem] pt-2" style="padding-bottom: calc(var(--composer-height, 9rem) + 2rem);">
         {#each messages as message, idx (idx)}
           <ChatMessageComponent
             role={message.role}
@@ -377,90 +469,123 @@
             reasoningTimeMs={message.reasoningTimeMs}
             isStreaming={isStreaming && idx === messages.length - 1 && message.role === "assistant"}
             isReasoning={isReasoning && idx === messages.length - 1 && message.role === "assistant"}
+            loadingState={idx === messages.length - 1 && message.role === "assistant" ? modelLoadingState : null}
             onEdit={message.role === "user" ? (newContent) => editMessage(idx, newContent) : undefined}
             onRegenerate={message.role === "assistant" && idx > 0 && messages[idx - 1].role === "user"
               ? () => regenerateFromIndex(idx - 1)
               : undefined}
           />
         {/each}
-      {/if}
+      </div>
     </div>
 
-    <!-- Input area -->
-    <div class="shrink-0">
-      <!-- Image preview strip -->
-      {#if attachedImages.length > 0}
-        <div class="mb-2 flex flex-wrap gap-2">
-          {#each attachedImages as imageUrl, idx (idx)}
-            <div class="relative group">
-              <img
-                src={imageUrl}
-                alt="Attached image {idx + 1}"
-                class="w-20 h-20 object-cover rounded border border-gray-200 dark:border-white/10"
-              />
-              <button
-                class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                onclick={() => removeImage(idx)}
-                title="Remove image"
-              >
-                ×
-              </button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-
-      <!-- Error message -->
-      {#if imageError}
-        <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
-          {imageError}
-        </div>
-      {/if}
-
-      <div class="flex gap-2">
-        <!-- Hidden file input -->
-        <input
-          type="file"
-          accept=".jpg,.jpeg,.png,.gif,.webp"
-          multiple
-          class="hidden"
-          bind:this={fileInput}
-          onchange={handleImageSelect}
-        />
-
-        <ExpandableTextarea
-          bind:value={userInput}
-          placeholder="Type a message..."
-          rows={3}
-          onkeydown={handleKeyDown}
-          disabled={isStreaming || !$selectedModelStore}
-        />
-        <div class="flex flex-col gap-2">
-          {#if isStreaming}
-            <button class="btn bg-red-500 hover:bg-red-600 text-white" onclick={cancelStreaming}>
-              Cancel
-            </button>
-          {:else}
-            <button
-              class="btn"
-              onclick={() => fileInput?.click()}
-              disabled={isStreaming || !$selectedModelStore}
-              title="Attach image"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
-                <path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 0 1 3.25 3h13.5A2.25 2.25 0 0 1 19 5.25v9.5A2.25 2.25 0 0 1 16.75 17H3.25A2.25 2.25 0 0 1 1 14.75v-9.5Zm1.5 5.81v3.69c0 .414.336.75.75.75h13.5a.75.75 0 0 0 .75-.75v-2.69l-2.22-2.219a.75.75 0 0 0-1.06 0l-1.91 1.909.47.47a.75.75 0 1 1-1.06 1.06L6.53 8.091a.75.75 0 0 0-1.06 0l-2.97 2.97ZM12 7a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z" clip-rule="evenodd" />
-              </svg>
-            </button>
-            <button
-              class="btn bg-primary text-btn-primary-text hover:opacity-90"
-              onclick={sendMessage}
-              disabled={(!userInput.trim() && attachedImages.length === 0) || !$selectedModelStore}
-            >
-              Send
-            </button>
-          {/if}
+    <!-- Sticky composer: opaque backdrop so messages aren't visible through it -->
+    <div bind:this={composerWrap} class="pointer-events-none absolute bottom-0 left-0 right-0">
+      <!-- Short, hard fade just at the top edge of the composer area -->
+      <div class="pointer-events-none h-3 bg-gradient-to-t from-background to-transparent"></div>
+      <div class="pointer-events-auto bg-background pb-4">
+        <div class="mx-auto max-w-[48rem] px-1">
+          {@render composer()}
         </div>
       </div>
     </div>
   {/if}
 </div>
+
+{#snippet composer()}
+  <div
+    class="rounded-sm border border-border bg-surface shadow-2xl shadow-black/40 transition-colors duration-150 focus-within:border-border-hover"
+  >
+    <!-- Image previews -->
+    {#if attachedImages.length > 0}
+      <div class="flex flex-wrap gap-2 px-3 pt-3">
+        {#each attachedImages as imageUrl, idx (idx)}
+          <div class="group relative">
+            <img
+              src={imageUrl}
+              alt="Attached image {idx + 1}"
+              class="h-16 w-16 rounded-sm border border-border object-cover"
+            />
+            <button
+              class="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-sm border border-border bg-zinc-900 text-txtsecondary opacity-0 transition-opacity duration-150 hover:text-white group-hover:opacity-100"
+              onclick={() => removeImage(idx)}
+              title="Remove image"
+              aria-label="Remove image"
+            >
+              <X class="h-3 w-3" />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <!-- Error message -->
+    {#if imageError}
+      <div class="mx-3 mt-3 rounded-sm border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
+        {imageError}
+      </div>
+    {/if}
+
+    <!-- Hidden file input -->
+    <input
+      type="file"
+      accept=".jpg,.jpeg,.png,.gif,.webp"
+      multiple
+      class="hidden"
+      bind:this={fileInput}
+      onchange={handleImageSelect}
+    />
+
+    <!-- Textarea -->
+    <textarea
+      bind:this={textareaEl}
+      bind:value={userInput}
+      onkeydown={handleKeyDown}
+      disabled={isStreaming || !$selectedModelStore}
+      placeholder={$selectedModelStore ? "Send a message..." : "Select a model to start..."}
+      rows="1"
+      class="block w-full resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 text-txtmain placeholder-zinc-700 outline-none disabled:opacity-50"
+    ></textarea>
+
+    <!-- Action row -->
+    <div class="flex items-center justify-between gap-2 px-2 pb-2">
+      <div class="flex items-center gap-1">
+        <button
+          class="btn p-2"
+          onclick={() => fileInput?.click()}
+          disabled={isStreaming || !$selectedModelStore}
+          title="Attach image"
+          aria-label="Attach image"
+        >
+          <ImageIcon class="h-4 w-4" />
+        </button>
+        <span class="hidden font-mono text-[10px] uppercase tracking-widest text-txtmuted sm:inline">
+          Enter to send · Shift+Enter for newline
+        </span>
+      </div>
+
+      {#if isStreaming}
+        <button class="btn btn-danger flex items-center gap-2" onclick={cancelStreaming}>
+          <Square class="h-3.5 w-3.5" />
+          Stop
+        </button>
+      {:else}
+        <button
+          class="btn btn-primary flex items-center gap-2"
+          onclick={sendMessage}
+          disabled={(!userInput.trim() && attachedImages.length === 0) || !$selectedModelStore}
+        >
+          <Send class="h-3.5 w-3.5" />
+          Send
+        </button>
+      {/if}
+    </div>
+  </div>
+{/snippet}
+
+<style>
+  .btn.active {
+    color: #ffffff;
+    border-color: var(--color-border-hover);
+  }
+</style>

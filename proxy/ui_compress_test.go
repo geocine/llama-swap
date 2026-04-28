@@ -14,16 +14,17 @@ import (
 	"time"
 )
 
-func TestServeCompressedFile_Brotli(t *testing.T) {
+func TestServeCompressedFile_PrefersGzip(t *testing.T) {
 	// Create test content
-	content := []byte("This is test content that should be compressed with brotli")
+	content := []byte("This is test content that should be compressed with gzip")
 	brContent := []byte("fake-brotli-compressed-data")
+	gzContent := []byte("fake-gzip-data")
 
 	// Create a test filesystem
 	mapFS := fstest.MapFS{
 		"test.js":    {Data: content, ModTime: time.Now()},
 		"test.js.br": {Data: brContent, ModTime: time.Now()},
-		"test.js.gz": {Data: []byte("fake-gzip-data"), ModTime: time.Now()},
+		"test.js.gz": {Data: gzContent, ModTime: time.Now()},
 	}
 	fs := http.FS(mapFS)
 
@@ -40,17 +41,17 @@ func TestServeCompressedFile_Brotli(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	// Check that brotli is used (preferred over gzip)
-	if encoding := resp.Header.Get("Content-Encoding"); encoding != "br" {
-		t.Errorf("Expected Content-Encoding 'br', got '%s'", encoding)
+	// Check that gzip is used when both are accepted.
+	if encoding := resp.Header.Get("Content-Encoding"); encoding != "gzip" {
+		t.Errorf("Expected Content-Encoding 'gzip', got '%s'", encoding)
 	}
 
 	if vary := resp.Header.Get("Vary"); vary != "Accept-Encoding" {
 		t.Errorf("Expected Vary 'Accept-Encoding', got '%s'", vary)
 	}
 
-	if !bytes.Equal(body, brContent) {
-		t.Errorf("Expected brotli content, got %s", string(body))
+	if !bytes.Equal(body, gzContent) {
+		t.Errorf("Expected gzip content, got %s", string(body))
 	}
 }
 
@@ -178,14 +179,14 @@ func TestSelectEncoding(t *testing.T) {
 		wantEncoding   string
 		wantExt        string
 	}{
-		{"br, gzip", "br", ".br"},
+		{"br, gzip", "gzip", ".gz"},
 		{"gzip, deflate", "gzip", ".gz"},
 		{"gzip", "gzip", ".gz"},
 		{"br", "br", ".br"},
 		{"", "", ""},
 		{"deflate", "", ""},
-		{"br;q=1.0, gzip;q=0.5", "br", ".br"},
-		{"gzip;q=1.0, br;q=0.5", "br", ".br"},
+		{"br;q=1.0, gzip;q=0.5", "gzip", ".gz"},
+		{"gzip;q=1.0, br;q=0.5", "gzip", ".gz"},
 		{"browser", "", ""},
 		{"compress, deflate", "", ""},
 	}

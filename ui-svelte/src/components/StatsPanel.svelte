@@ -91,66 +91,66 @@
 </script>
 
 <div class="card">
-  <div class="rounded-lg overflow-hidden border border-card-border-inner">
-    <table class="min-w-full divide-y divide-card-border-inner">
+  <div class="rounded-sm overflow-hidden border border-border">
+    <table class="min-w-full divide-y divide-border">
       <thead class="bg-secondary">
         <tr>
-          <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-txtmain">Requests</th>
-          <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-txtmain border-l border-card-border-inner">
+          <th class="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-widest text-txtsecondary">Requests</th>
+          <th class="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-widest text-txtsecondary border-l border-border">
             Processed
           </th>
-          <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-txtmain border-l border-card-border-inner">
+          <th class="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-widest text-txtsecondary border-l border-border">
             Generated
           </th>
-          <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-txtmain border-l border-card-border-inner">
+          <th class="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-widest text-txtsecondary border-l border-border">
             Token Stats (tokens/sec)
           </th>
         </tr>
       </thead>
 
-      <tbody class="bg-surface divide-y divide-card-border-inner">
-        <tr class="hover:bg-secondary">
-          <td class="px-4 py-4 text-sm font-semibold text-gray-900 dark:text-white">
+      <tbody class="bg-surface divide-y divide-border">
+        <tr class="hover:bg-secondary transition-colors duration-150">
+          <td class="px-4 py-4 text-sm font-semibold text-txtmain">
             <div class="flex flex-col gap-1">
-              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">Completed: {nf.format(stats.totalRequests)}</span>
-              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">Waiting: {nf.format(stats.inFlightRequests)}</span>
+              <span class="text-xs text-txtsecondary font-mono">Completed: {nf.format(stats.totalRequests)}</span>
+              <span class="text-xs text-txtsecondary font-mono">Waiting: {nf.format(stats.inFlightRequests)}</span>
             </div>
           </td>
 
-          <td class="px-4 py-4 text-sm text-gray-700 dark:text-gray-300 border-l border-gray-200 dark:border-white/10">
+          <td class="px-4 py-4 text-sm text-txtmain border-l border-border">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium">{nf.format(stats.totalInputTokens)}</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">tokens</span>
+              <span class="text-sm font-mono font-medium">{nf.format(stats.totalInputTokens)}</span>
+              <span class="text-xs text-txtsecondary">tokens</span>
             </div>
           </td>
 
-          <td class="px-4 py-4 text-sm text-gray-700 dark:text-gray-300 border-l border-gray-200 dark:border-white/10">
+          <td class="px-4 py-4 text-sm text-txtmain border-l border-border">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium">{nf.format(stats.totalOutputTokens)}</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">tokens</span>
+              <span class="text-sm font-mono font-medium">{nf.format(stats.totalOutputTokens)}</span>
+              <span class="text-xs text-txtsecondary">tokens</span>
             </div>
           </td>
 
-          <td class="px-4 py-4 border-l border-gray-200 dark:border-white/10">
+          <td class="px-4 py-4 border-l border-border">
             <div class="space-y-3">
               <div class="grid grid-cols-3 gap-2 items-center">
                 <div class="text-center">
-                  <div class="text-xs text-gray-500 dark:text-gray-400">P50</div>
-                  <div class="mt-1 inline-block rounded-full bg-gray-100 dark:bg-white/5 px-3 py-1 text-sm font-semibold text-gray-800 dark:text-white">
+                  <div class="text-[10px] font-bold uppercase tracking-widest text-txtsecondary">P50</div>
+                  <div class="mt-1 inline-block rounded-sm bg-secondary px-3 py-1 text-sm font-mono font-semibold text-txtmain">
                     {stats.tokenStats.p50}
                   </div>
                 </div>
 
                 <div class="text-center">
-                  <div class="text-xs text-gray-500 dark:text-gray-400">P95</div>
-                  <div class="mt-1 inline-block rounded-full bg-gray-100 dark:bg-white/5 px-3 py-1 text-sm font-semibold text-gray-800 dark:text-white">
+                  <div class="text-[10px] font-bold uppercase tracking-widest text-txtsecondary">P95</div>
+                  <div class="mt-1 inline-block rounded-sm bg-secondary px-3 py-1 text-sm font-mono font-semibold text-txtmain">
                     {stats.tokenStats.p95}
                   </div>
                 </div>
 
                 <div class="text-center">
-                  <div class="text-xs text-gray-500 dark:text-gray-400">P99</div>
-                  <div class="mt-1 inline-block rounded-full bg-gray-100 dark:bg-white/5 px-3 py-1 text-sm font-semibold text-gray-800 dark:text-white">
+                  <div class="text-[10px] font-bold uppercase tracking-widest text-txtsecondary">P99</div>
+                  <div class="mt-1 inline-block rounded-sm bg-secondary px-3 py-1 text-sm font-mono font-semibold text-txtmain">
                     {stats.tokenStats.p99}
                   </div>
                 </div>

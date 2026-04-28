@@ -67,6 +67,34 @@ func TestProxyManager_SwapProcessCorrectly(t *testing.T) {
 		assert.Contains(t, w.Body.String(), modelName)
 	}
 }
+
+func TestProxyManager_ModelStatusEndpoint(t *testing.T) {
+	config := config.AddDefaultGroupToConfig(config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": getTestSimpleResponderConfig("model1"),
+		},
+		LogLevel: "error",
+	})
+
+	proxy := New(config)
+	defer proxy.StopProcesses(StopWaitForInflightRequest)
+
+	req := httptest.NewRequest("GET", "/api/models", nil)
+	w := CreateTestResponseRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var models []Model
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &models))
+	if assert.Len(t, models, 1) {
+		assert.Equal(t, "model1", models[0].Id)
+		assert.Equal(t, "stopped", models[0].State)
+		assert.NotNil(t, models[0].StateChangedAt)
+		assert.False(t, models[0].StateChangedAt.IsZero())
+	}
+}
 func TestProxyManager_SwapMultiProcess(t *testing.T) {
 	config := config.AddDefaultGroupToConfig(config.Config{
 		HealthCheckTimeout: 15,

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mostlygeek/llama-swap/proxy/config"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,24 @@ func TestProcessGroup_HasMember(t *testing.T) {
 	assert.True(t, pg.HasMember("model1"))
 	assert.True(t, pg.HasMember("model2"))
 	assert.False(t, pg.HasMember("model3"))
+}
+
+func TestProcessGroup_StopImmediatelyDoesNotWaitForGroupLock(t *testing.T) {
+	pg := NewProcessGroup("G1", processGroupTestConfig, testLogger, testLogger)
+	pg.Lock()
+	defer pg.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pg.StopProcess("model1", StopImmediately)
+	}()
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("StopProcess blocked on process group lock")
+	}
 }
 
 // TestProcessGroup_ProxyRequestSwapIsTrueParallel tests that when swap is true

@@ -3,7 +3,6 @@ import { persistentStore } from "./persistent";
 import type { ScreenWidth } from "../lib/types";
 
 // Persistent stores
-export const isDarkMode = persistentStore<boolean>("theme", false);
 export const appTitle = persistentStore<string>("app-title", "llama-swap");
 
 // Non-persistent stores
@@ -14,11 +13,6 @@ export const connectionState = writable<"connected" | "connecting" | "disconnect
 export const isNarrow = derived(screenWidth, ($screenWidth) => {
   return $screenWidth === "xs" || $screenWidth === "sm" || $screenWidth === "md";
 });
-
-// Function to toggle theme
-export function toggleTheme(): void {
-  isDarkMode.update((current) => !current);
-}
 
 // Function to check and update screen width
 export function checkScreenWidth(): void {

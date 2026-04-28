@@ -19,6 +19,6 @@
   );
 </script>
 
-<div class="flex items-center" title={tooltipText}>
-  <span class="inline-block w-3 h-3 rounded-full {eventStatusColor} mr-2"></span>
+<div class="flex items-center ml-2" title={tooltipText}>
+  <span class="inline-block w-2.5 h-2.5 rounded-full {eventStatusColor}"></span>
 </div>

@@ -285,6 +285,48 @@ func TestProcess_SwapState(t *testing.T) {
 	}
 }
 
+func TestProcess_StateChangedAtUpdates(t *testing.T) {
+	p := NewProcess("test", 10, getTestSimpleResponderConfig("test"), debugLogger, debugLogger)
+	initial := p.CurrentStateChangedAt()
+
+	time.Sleep(time.Millisecond)
+	_, err := p.swapState(StateStopped, StateStarting)
+
+	assert.NoError(t, err)
+	assert.True(t, p.CurrentStateChangedAt().After(initial))
+}
+
+func TestProcess_UnloadDuringStartStopsCleanly(t *testing.T) {
+	expectedMessage := "testing91931"
+	conf := getTestSimpleResponderConfig(expectedMessage)
+	conf.Proxy = "http://127.0.0.1:1"
+
+	process := NewProcess("test-process", 5, conf, debugLogger, debugLogger)
+	process.healthCheckLoopInterval = 50 * time.Millisecond
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- process.start()
+	}()
+
+	assert.Eventually(t, func() bool {
+		return process.CurrentState() == StateStarting
+	}, time.Second, 10*time.Millisecond)
+
+	process.StopImmediately()
+
+	select {
+	case err := <-errCh:
+		assert.Error(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("start did not return after unload")
+	}
+
+	assert.Eventually(t, func() bool {
+		return process.CurrentState() == StateStopped
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestProcess_ShutdownInterruptsHealthCheck(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping long shutdown test")

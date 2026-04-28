@@ -86,7 +86,7 @@
   }
 
   function handleKeyDown(e: KeyboardEvent): void {
-    const step = 2; // 2% increment for keyboard navigation
+    const step = 2;
     const key = e.key;
 
     if (direction === "horizontal" && (key === "ArrowLeft" || key === "ArrowRight")) {
@@ -108,8 +108,8 @@
 
   let handleClass = $derived(
     direction === "horizontal"
-      ? "w-2 h-full cursor-col-resize"
-      : "w-full h-2 cursor-row-resize"
+      ? "w-1 h-full cursor-col-resize"
+      : "w-full h-1 cursor-row-resize"
   );
 
   let leftStyle = $derived(
@@ -125,7 +125,7 @@
   );
 </script>
 
-<div bind:this={containerRef} class="flex {containerClass} h-full w-full gap-2">
+<div bind:this={containerRef} class="flex {containerClass} h-full w-full gap-1">
   <div style={leftStyle} class="overflow-hidden">
     {@render leftPanel()}
   </div>
@@ -135,7 +135,7 @@
   <div
     role="separator"
     tabindex="0"
-    class="{handleClass} bg-primary hover:bg-success transition-colors rounded flex-shrink-0"
+    class="{handleClass} bg-zinc-800 hover:bg-zinc-600 transition-colors duration-150 rounded-sm flex-shrink-0"
     onmousedown={handleMouseDown}
     ontouchstart={handleTouchStart}
     onkeydown={handleKeyDown}

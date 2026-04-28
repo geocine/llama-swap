@@ -6,6 +6,7 @@ SERVER_BIN="${LLAMA_SERVER_BIN:-/app/llama-server}"
 PROGRESS_INTERVAL="${LLAMA_DOWNLOAD_PROGRESS_INTERVAL:-15}"
 DOWNLOAD_META_DIR=""
 SERVER_LOG_PIPE=""
+ACTIVE_DOWNLOADS_FILE=""
 
 format_bytes() {
     bytes="$1"
@@ -45,6 +46,10 @@ store_download_total_bytes() {
     meta_name="$(safe_meta_name "${download_path##*/}")"
     total_file="$DOWNLOAD_META_DIR/$meta_name.total"
     url_file="$DOWNLOAD_META_DIR/$meta_name.url"
+    active_file="$DOWNLOAD_META_DIR/$meta_name.active"
+
+    printf '%s\n' "$download_path" > "$active_file"
+    printf '%s\n' "$download_path" >> "$ACTIVE_DOWNLOADS_FILE"
 
     if [ -f "$total_file" ]; then
         return
@@ -97,7 +102,19 @@ monitor_downloads() {
     while kill -0 "$SERVER_PID" 2>/dev/null; do
         active_download=0
 
-        for file in "$cache_dir"/*.downloadInProgress; do
+        if [ ! -s "$ACTIVE_DOWNLOADS_FILE" ]; then
+            sleep "$PROGRESS_INTERVAL"
+            continue
+        fi
+
+        active_list="$DOWNLOAD_META_DIR/active-downloads.sorted"
+        sort -u "$ACTIVE_DOWNLOADS_FILE" > "$active_list"
+
+        while IFS= read -r file; do
+            case "$file" in
+                "$cache_dir"/*) ;;
+                *) continue ;;
+            esac
             [ -f "$file" ] || continue
 
             active_download=1
@@ -129,7 +146,7 @@ monitor_downloads() {
                     "$name" \
                     "$(format_bytes "$bytes")"
             fi
-        done
+        done < "$active_list"
 
         if [ "$active_download" -eq 0 ] && [ "$seen_download" -eq 1 ]; then
             printf 'llama-server-progress: download finished, waiting for model initialization\n'
@@ -168,6 +185,8 @@ cleanup() {
 
 CACHE_DIR="$(resolve_cache_dir)"
 DOWNLOAD_META_DIR="$(mktemp -d)"
+ACTIVE_DOWNLOADS_FILE="$DOWNLOAD_META_DIR/active-downloads"
+: > "$ACTIVE_DOWNLOADS_FILE"
 SERVER_LOG_PIPE="$(mktemp -u)"
 mkfifo "$SERVER_LOG_PIPE"
 

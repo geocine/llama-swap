@@ -1,4 +1,7 @@
 FROM ghcr.io/mostlygeek/llama-swap:cuda
 
+COPY --chmod=755 docker/quickpod-entrypoint.sh /app/quickpod-entrypoint
 COPY --chmod=755 docker/llama-server-progress.sh /app/llama-server-progress
 COPY quickpod.config.yaml /app/config.yaml
+
+ENTRYPOINT [ "/app/quickpod-entrypoint" ]

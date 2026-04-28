@@ -8,19 +8,21 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mostlygeek/llama-swap/event"
 )
 
 type Model struct {
-	Id          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	State       string   `json:"state"`
-	Unlisted    bool     `json:"unlisted"`
-	PeerID      string   `json:"peerID"`
-	Aliases     []string `json:"aliases,omitempty"`
+	Id             string     `json:"id"`
+	Name           string     `json:"name"`
+	Description    string     `json:"description"`
+	State          string     `json:"state"`
+	StateChangedAt *time.Time `json:"stateChangedAt,omitempty"`
+	Unlisted       bool       `json:"unlisted"`
+	PeerID         string     `json:"peerID"`
+	Aliases        []string   `json:"aliases,omitempty"`
 }
 
 func addApiHandlers(pm *ProxyManager) {
@@ -32,6 +34,8 @@ func addApiHandlers(pm *ProxyManager) {
 	// Protected with API key authentication
 	apiGroup := pm.ginEngine.Group("/api", pm.apiKeyAuth(false))
 	{
+		apiGroup.GET("/models", pm.apiGetModels)
+		apiGroup.GET("/models/", pm.apiGetModels)
 		apiGroup.POST("/models/unload", pm.apiUnloadAllModels)
 		apiGroup.POST("/models/unload/*model", pm.apiUnloadSingleModelHandler)
 		apiGroup.GET("/events", pm.apiSendEvents)
@@ -64,6 +68,7 @@ func (pm *ProxyManager) getModelStatus() []Model {
 		if processGroup != nil {
 			process := processGroup.processes[modelID]
 			if process != nil {
+				stateChangedAt := process.CurrentStateChangedAt()
 				var stateStr string
 				switch process.CurrentState() {
 				case StateReady:
@@ -80,6 +85,16 @@ func (pm *ProxyManager) getModelStatus() []Model {
 					stateStr = "unknown"
 				}
 				state = stateStr
+				models = append(models, Model{
+					Id:             modelID,
+					Name:           pm.config.Models[modelID].Name,
+					Description:    pm.config.Models[modelID].Description,
+					State:          state,
+					StateChangedAt: &stateChangedAt,
+					Unlisted:       pm.config.Models[modelID].Unlisted,
+					Aliases:        pm.config.Models[modelID].Aliases,
+				})
+				continue
 			}
 		}
 		models = append(models, Model{
@@ -105,6 +120,10 @@ func (pm *ProxyManager) getModelStatus() []Model {
 	}
 
 	return models
+}
+
+func (pm *ProxyManager) apiGetModels(c *gin.Context) {
+	c.JSON(http.StatusOK, pm.getModelStatus())
 }
 
 type messageType string

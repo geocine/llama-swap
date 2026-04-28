@@ -192,17 +192,17 @@
 <dialog
   bind:this={dialogEl}
   onclose={handleDialogClose}
-  class="bg-surface text-txtmain rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] p-0 backdrop:bg-black/50 m-auto"
+  class="bg-surface text-txtmain rounded-sm shadow-2xl max-w-4xl w-full max-h-[90vh] p-0 backdrop:bg-black/70 m-auto border border-border"
 >
   {#if capture}
     <div class="flex flex-col max-h-[90vh]">
       <div
-        class="flex justify-between items-center p-4 border-b border-card-border"
+        class="flex justify-between items-center p-4 border-b border-border"
       >
-        <h2 class="text-xl font-bold pb-0">Capture #{capture.id + 1}{#if capture.req_path} <span class="text-base font-mono font-normal text-txtsecondary">{capture.req_path}</span>{/if}</h2>
+        <h2 class="text-sm font-bold uppercase tracking-wide pb-0">Capture #{capture.id + 1}{#if capture.req_path} <span class="text-xs font-mono font-normal text-txtsecondary normal-case tracking-normal">{capture.req_path}</span>{/if}</h2>
         <button
           onclick={() => dialogEl?.close()}
-          class="text-txtsecondary hover:text-txtmain text-2xl leading-none"
+          class="text-txtsecondary hover:text-white text-2xl leading-none transition-colors duration-150"
         >
           &times;
         </button>
@@ -212,18 +212,18 @@
         <!-- Request Headers -->
         <details class="group" open>
           <summary
-            class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain"
+            class="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-txtsecondary hover:text-white transition-colors duration-150"
           >
             Request Headers
           </summary>
           <div
-            class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-48"
+            class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-48"
           >
             <table class="w-full text-sm">
               <tbody>
                 {#each Object.entries(capture.req_headers || {}) as [key, value]}
-                  <tr class="border-b border-card-border-inner last:border-0">
-                    <td class="px-3 py-1 font-mono text-primary whitespace-nowrap"
+                  <tr class="border-b border-border last:border-0">
+                    <td class="px-3 py-1 font-mono text-zinc-400 whitespace-nowrap"
                       >{key}</td
                     >
                     <td class="px-3 py-1 font-mono break-all">{value}</td>
@@ -237,7 +237,7 @@
         <!-- Request Body -->
         <details class="group" open>
           <summary
-            class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain"
+            class="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-txtsecondary hover:text-white transition-colors duration-150"
           >
             Request Body
           </summary>
@@ -270,16 +270,16 @@
               </button>
             </div>
             <div
-              class="mt-1 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-1 bg-background rounded-sm border border-border overflow-auto max-h-96"
             >
               <pre
-                class="p-3 text-sm font-mono whitespace-pre-wrap break-all">{displayedRequestBody}</pre>
+                class="p-3 text-sm font-mono whitespace-pre-wrap break-all text-zinc-400">{displayedRequestBody}</pre>
             </div>
           {:else}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
             >
-              <pre class="p-3 text-sm font-mono whitespace-pre-wrap break-all"
+              <pre class="p-3 text-sm font-mono whitespace-pre-wrap break-all text-txtsecondary"
                 >(empty)</pre
               >
             </div>
@@ -289,18 +289,18 @@
         <!-- Response Headers -->
         <details class="group" open>
           <summary
-            class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain"
+            class="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-txtsecondary hover:text-white transition-colors duration-150"
           >
             Response Headers
           </summary>
           <div
-            class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-48"
+            class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-48"
           >
             <table class="w-full text-sm">
               <tbody>
                 {#each Object.entries(capture.resp_headers || {}) as [key, value]}
-                  <tr class="border-b border-card-border-inner last:border-0">
-                    <td class="px-3 py-1 font-mono text-primary whitespace-nowrap"
+                  <tr class="border-b border-border last:border-0">
+                    <td class="px-3 py-1 font-mono text-zinc-400 whitespace-nowrap"
                       >{key}</td
                     >
                     <td class="px-3 py-1 font-mono break-all">{value}</td>
@@ -314,13 +314,13 @@
         <!-- Response Body -->
         <details class="group" open>
           <summary
-            class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain"
+            class="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-txtsecondary hover:text-white transition-colors duration-150"
           >
             Response Body
           </summary>
           {#if isResponseImage && capture.resp_body}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
             >
               <div class="p-3 flex justify-center">
                 <img
@@ -367,14 +367,14 @@
               </button>
             </div>
             <div
-              class="mt-1 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-1 bg-background rounded-sm border border-border overflow-auto max-h-96"
             >
               {#if respBodyTab === "chat"}
                 <div class="p-3 text-sm space-y-3">
                   {#if sseChat.reasoning}
                     <div>
                       <div
-                        class="text-xs font-semibold uppercase tracking-wider text-txtsecondary mb-1"
+                        class="text-[10px] font-bold uppercase tracking-widest text-txtsecondary mb-1"
                       >
                         Reasoning
                       </div>
@@ -386,7 +386,7 @@
                     <div>
                       {#if sseChat.reasoning}
                         <div
-                          class="text-xs font-semibold uppercase tracking-wider text-txtsecondary mb-1"
+                          class="text-[10px] font-bold uppercase tracking-widest text-txtsecondary mb-1"
                         >
                           Response
                         </div>
@@ -396,17 +396,17 @@
                     </div>
                   {/if}
                   {#if !sseChat.reasoning && !sseChat.content}
-                    <pre class="font-mono">(empty)</pre>
+                    <pre class="font-mono text-txtsecondary">(empty)</pre>
                   {/if}
                 </div>
               {:else}
                 <pre
-                  class="p-3 text-sm font-mono whitespace-pre-wrap break-all">{displayedResponseBody || "(empty)"}</pre>
+                  class="p-3 text-sm font-mono whitespace-pre-wrap break-all text-zinc-400">{displayedResponseBody || "(empty)"}</pre>
               {/if}
             </div>
           {:else if responseBodyRaw}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
             >
               <div class="p-3 text-sm text-txtsecondary italic">
                 (binary data - {responseContentType || "unknown content type"})
@@ -414,15 +414,15 @@
             </div>
           {:else}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
             >
-              <pre class="p-3 text-sm font-mono">(empty)</pre>
+              <pre class="p-3 text-sm font-mono text-txtsecondary">(empty)</pre>
             </div>
           {/if}
         </details>
       </div>
 
-      <div class="p-4 border-t border-card-border flex justify-end">
+      <div class="p-4 border-t border-border flex justify-end">
         <button onclick={() => dialogEl?.close()} class="btn"> Close </button>
       </div>
     </div>
@@ -432,21 +432,24 @@
 <style>
   .tab-btn {
     padding: 2px 10px;
-    font-size: 0.75rem;
-    border-radius: 4px;
-    color: var(--color-txtsecondary);
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: 2px;
+    color: #71717a;
     cursor: pointer;
     border: 1px solid transparent;
     background: transparent;
-    transition: all 0.15s;
+    transition: all 150ms ease;
   }
   .tab-btn:hover {
-    color: var(--color-txtmain);
-    background: var(--color-secondary);
+    color: #e4e4e7;
+    background: rgba(63, 63, 70, 0.3);
   }
   .tab-btn-active {
-    color: var(--color-primary);
-    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
-    border-color: color-mix(in srgb, var(--color-primary) 25%, transparent);
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: #3f3f46;
   }
 </style>

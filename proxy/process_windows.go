@@ -14,3 +14,10 @@ func setProcAttributes(cmd *exec.Cmd) {
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 	}
 }
+
+func forceKillProcess(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	return cmd.Process.Kill()
+}

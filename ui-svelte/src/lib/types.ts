@@ -5,6 +5,7 @@ export type ModelStatus = "ready" | "starting" | "stopping" | "stopped" | "shutd
 export interface Model {
   id: string;
   state: ModelStatus;
+  stateChangedAt?: string;
   name: string;
   description: string;
   unlisted: boolean;

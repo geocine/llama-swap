@@ -1,9 +1,11 @@
 <script lang="ts">
   import { renderMarkdown, escapeHtml, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, LoaderCircle } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import type { ContentPart } from "../../lib/types";
+  import { formatElapsed } from "../../lib/modelLoading";
+  import type { ChatModelLoadingState } from "../../lib/modelLoading";
 
   interface Props {
     role: "user" | "assistant" | "system";
@@ -12,11 +14,22 @@
     reasoningTimeMs?: number;
     isStreaming?: boolean;
     isReasoning?: boolean;
+    loadingState?: ChatModelLoadingState | null;
     onEdit?: (newContent: string) => void;
     onRegenerate?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, isStreaming = false, isReasoning = false, onEdit, onRegenerate }: Props = $props();
+  let {
+    role,
+    content,
+    reasoning_content = "",
+    reasoningTimeMs = 0,
+    isStreaming = false,
+    isReasoning = false,
+    loadingState = null,
+    onEdit,
+    onRegenerate,
+  }: Props = $props();
 
   let textContent = $derived(getTextContent(content));
   let imageUrls = $derived(getImageUrls(content));
@@ -159,181 +172,241 @@
   }
 </script>
 
-<div class="flex {role === 'user' ? 'justify-end' : 'justify-start'} mb-4">
-  <div
-    class="relative group rounded-lg px-4 py-2 {role === 'user'
-      ? 'max-w-[85%] bg-primary text-btn-primary-text'
-      : 'w-full sm:w-4/5 bg-surface border border-gray-200 dark:border-white/10'}"
-  >
-    {#if role === "assistant"}
-      {#if reasoning_content || isReasoning}
-        <div class="mb-3 border border-gray-200 dark:border-white/10 rounded overflow-hidden">
-          <button
-            class="w-full flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors text-sm"
-            onclick={() => showReasoning = !showReasoning}
-          >
-            {#if showReasoning}
-              <ChevronDown class="w-4 h-4" />
-            {:else}
-              <ChevronRight class="w-4 h-4" />
-            {/if}
-            <Brain class="w-4 h-4" />
-            <span class="font-medium">Reasoning</span>
-            <span class="text-txtsecondary ml-2">
-              ({reasoning_content.length} chars{#if !isReasoning && reasoningTimeMs > 0}, {formatDuration(reasoningTimeMs)}{/if})
-            </span>
-            {#if isReasoning}
-              <span class="ml-auto flex items-center gap-1 text-txtsecondary">
-                <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-                reasoning...
+<div class="group flex flex-col {role === 'user' ? 'items-end' : 'items-start'} gap-3 py-6">
+  {#if role === "assistant"}
+    <!-- Role label -->
+    <div class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-txtsecondary">
+      <span class="h-1 w-1 rounded-full {loadingState ? 'animate-pulse bg-warning' : 'bg-success'}"></span>
+      Assistant
+    </div>
+
+    {#if loadingState}
+      <div class="w-full overflow-hidden rounded-sm border border-border bg-surface">
+        <div class="flex items-center gap-3 px-4 py-3">
+          <LoaderCircle class="h-4 w-4 animate-spin text-white" />
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span class="text-xs font-bold uppercase tracking-widest text-txtmain">
+                {loadingState.label}
               </span>
-            {/if}
-          </button>
-          {#if showReasoning}
-            <div class="px-3 py-2 bg-gray-50/50 dark:bg-white/[0.02] text-sm text-txtsecondary whitespace-pre-wrap font-mono">
-              {reasoning_content}{#if isReasoning}<span class="inline-block w-1.5 h-4 bg-current animate-pulse ml-0.5"></span>{/if}
+              <span class="font-mono text-[11px] uppercase tracking-widest text-txtsecondary">
+                {loadingState.modelId}
+              </span>
             </div>
-          {/if}
+            <div class="mt-1 font-mono text-[11px] uppercase tracking-widest text-txtmuted">
+              {loadingState.state} · {formatElapsed(loadingState.elapsedMs)}
+            </div>
+          </div>
         </div>
-      {/if}
+        <div class="h-1 overflow-hidden bg-zinc-800">
+          <div class="loading-progress h-full w-1/2 bg-white"></div>
+        </div>
+      </div>
+    {:else}
+    <!-- Reasoning collapsible -->
+    {#if reasoning_content || isReasoning}
+      <div class="w-full overflow-hidden rounded-sm border border-border bg-surface">
+        <button
+          class="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors duration-150 hover:bg-secondary-hover"
+          onclick={() => (showReasoning = !showReasoning)}
+        >
+          {#if showReasoning}
+            <ChevronDown class="h-3.5 w-3.5 text-txtsecondary" />
+          {:else}
+            <ChevronRight class="h-3.5 w-3.5 text-txtsecondary" />
+          {/if}
+          <Brain class="h-3.5 w-3.5 text-txtsecondary" />
+          <span class="text-[10px] font-bold uppercase tracking-widest text-txtmain">Reasoning</span>
+          <span class="font-mono text-[11px] text-txtmuted">
+            {reasoning_content.length} chars{#if !isReasoning && reasoningTimeMs > 0} · {formatDuration(reasoningTimeMs)}{/if}
+          </span>
+          {#if isReasoning}
+            <span class="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-txtsecondary">
+              <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-white"></span>
+              thinking
+            </span>
+          {/if}
+        </button>
+        {#if showReasoning}
+          <div class="whitespace-pre-wrap border-t border-border bg-surface-elevated px-4 py-3 font-mono text-[13px] leading-6 text-txtsecondary">
+            {reasoning_content}{#if isReasoning}<span class="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-current"></span>{/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if hasImages}
+      <div class="flex flex-wrap gap-2">
+        {#each imageUrls as imageUrl, idx (idx)}
+          <button
+            onclick={() => openModal(imageUrl)}
+            class="cursor-pointer rounded-sm border border-border transition-opacity duration-150 hover:opacity-80"
+          >
+            <img
+              src={imageUrl}
+              alt="Image {idx + 1}"
+              class="max-h-64 rounded-sm"
+            />
+          </button>
+        {/each}
+      </div>
+    {/if}
+
+    {#if showRaw}
+      <div class="w-full whitespace-pre-wrap rounded-sm border border-border bg-surface-elevated p-3 font-mono text-sm text-txtmain">
+        {textContent}
+      </div>
+    {:else}
+      <div class="prose prose-sm prose-invert w-full max-w-none leading-7 text-txtmain" use:codeBlockCopy>
+        {#each renderedParts.blocks as block (block.id)}
+          {@html block.html}
+        {/each}
+        {@html renderedParts.pendingHtml}
+        {#if isStreaming && !isReasoning}
+          <span class="ml-0.5 inline-block h-4 w-2 animate-pulse bg-current"></span>
+        {/if}
+      </div>
+    {/if}
+
+    {#if !isStreaming}
+      <div
+        class="flex gap-1 text-txtsecondary opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
+      >
+        {#if onRegenerate}
+          <button
+            class="rounded-sm p-1.5 text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white"
+            onclick={onRegenerate}
+            title="Regenerate response"
+            aria-label="Regenerate response"
+          >
+            <RefreshCw class="h-3.5 w-3.5" />
+          </button>
+        {/if}
+        <button
+          class="rounded-sm p-1.5 text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white"
+          onclick={copyToClipboard}
+          title={copied ? "Copied!" : "Copy to clipboard"}
+          aria-label="Copy to clipboard"
+        >
+          {#if copied}
+            <Check class="h-3.5 w-3.5 text-success" />
+          {:else}
+            <Copy class="h-3.5 w-3.5" />
+          {/if}
+        </button>
+        <button
+          class="rounded-sm p-1.5 transition-colors duration-150 hover:bg-secondary hover:text-white {showRaw ? 'text-white' : 'text-txtsecondary'}"
+          onclick={() => (showRaw = !showRaw)}
+          title={showRaw ? "Show rendered" : "Show raw"}
+          aria-label={showRaw ? "Show rendered" : "Show raw"}
+        >
+          <Code class="h-3.5 w-3.5" />
+        </button>
+      </div>
+    {/if}
+    {/if}
+  {:else}
+    <!-- User message -->
+    {#if isEditing}
+      <div class="flex w-full max-w-[85%] flex-col gap-2">
+        <textarea
+          class="w-full resize-none rounded-sm border border-border bg-black px-3 py-2 text-sm text-txtmain outline-none transition-colors duration-150 focus:border-white"
+          rows="3"
+          bind:value={editContent}
+          onkeydown={handleKeyDown}
+        ></textarea>
+        <div class="flex justify-end gap-1">
+          <button
+            class="btn btn--sm flex items-center gap-1.5"
+            onclick={cancelEdit}
+            title="Cancel"
+          >
+            <X class="h-3.5 w-3.5" />
+            Cancel
+          </button>
+          <button
+            class="btn btn-primary btn--sm flex items-center gap-1.5"
+            onclick={saveEdit}
+            title="Save and regenerate"
+          >
+            <Save class="h-3.5 w-3.5" />
+            Save
+          </button>
+        </div>
+      </div>
+    {:else}
       {#if hasImages}
-        <div class="mb-3 flex flex-wrap gap-2">
+        <div class="flex flex-wrap justify-end gap-2">
           {#each imageUrls as imageUrl, idx (idx)}
             <button
               onclick={() => openModal(imageUrl)}
-              class="cursor-pointer rounded border border-gray-200 dark:border-white/10 hover:opacity-80 transition-opacity"
+              class="cursor-pointer rounded-sm border border-border transition-opacity duration-150 hover:opacity-80"
             >
               <img
                 src={imageUrl}
                 alt="Image {idx + 1}"
-                class="max-h-64 rounded"
+                class="max-h-48 max-w-[200px] rounded-sm"
               />
             </button>
           {/each}
         </div>
       {/if}
-      {#if showRaw}
-        <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
-      {:else}
-        <div class="prose prose-sm dark:prose-invert max-w-none" use:codeBlockCopy>
-          {#each renderedParts.blocks as block (block.id)}
-            {@html block.html}
-          {/each}
-          {@html renderedParts.pendingHtml}
-          {#if isStreaming && !isReasoning}
-            <span class="inline-block w-2 h-4 bg-current animate-pulse ml-0.5"></span>
-          {/if}
+      {#if textContent.trim()}
+        <div class="max-w-[80%]">
+          <div class="whitespace-pre-wrap rounded-sm border border-border bg-secondary px-4 py-2.5 text-sm leading-6 text-txtmain">{textContent}</div>
         </div>
       {/if}
-      {#if !isStreaming}
-        <div class="flex gap-1 mt-2 pt-1 border-t border-gray-200 dark:border-white/10">
-          {#if onRegenerate}
-            <button
-              class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-              onclick={onRegenerate}
-              title="Regenerate response"
-            >
-              <RefreshCw class="w-4 h-4" />
-            </button>
+      <div
+        class="flex gap-1 text-txtsecondary opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
+      >
+        <button
+          class="rounded-sm p-1.5 text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white"
+          onclick={copyToClipboard}
+          title={copied ? "Copied!" : "Copy to clipboard"}
+          aria-label="Copy to clipboard"
+        >
+          {#if copied}
+            <Check class="h-3.5 w-3.5 text-success" />
+          {:else}
+            <Copy class="h-3.5 w-3.5" />
           {/if}
-          <button
-            class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-            onclick={copyToClipboard}
-            title={copied ? "Copied!" : "Copy to clipboard"}
-          >
-            {#if copied}
-              <Check class="w-4 h-4 text-green-500" />
-            {:else}
-              <Copy class="w-4 h-4" />
-            {/if}
-          </button>
-          <button
-            class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 {showRaw ? 'text-primary' : 'text-txtsecondary'}"
-            onclick={() => showRaw = !showRaw}
-            title={showRaw ? "Show rendered" : "Show raw"}
-          >
-            <Code class="w-4 h-4" />
-          </button>
-        </div>
-      {/if}
-    {:else}
-      {#if isEditing}
-        <div class="flex flex-col gap-2 min-w-[300px]">
-          <textarea
-            class="w-full px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-            rows="3"
-            bind:value={editContent}
-            onkeydown={handleKeyDown}
-          ></textarea>
-          <div class="flex justify-end gap-2">
-            <button
-              class="p-1.5 rounded hover:bg-white/20"
-              onclick={cancelEdit}
-              title="Cancel"
-            >
-              <X class="w-4 h-4" />
-            </button>
-            <button
-              class="p-1.5 rounded hover:bg-white/20"
-              onclick={saveEdit}
-              title="Save"
-            >
-              <Save class="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      {:else}
-        {#if hasImages}
-          <div class="mb-2 flex flex-wrap gap-2">
-            {#each imageUrls as imageUrl, idx (idx)}
-              <button
-                onclick={() => openModal(imageUrl)}
-                class="cursor-pointer rounded border border-white/20 hover:opacity-80 transition-opacity"
-              >
-                <img
-                  src={imageUrl}
-                  alt="Image {idx + 1}"
-                  class="max-w-[200px] rounded"
-                />
-              </button>
-            {/each}
-          </div>
-        {/if}
-        <div class="whitespace-pre-wrap pr-8">{textContent}</div>
+        </button>
         {#if canEdit}
           <button
-            class="absolute top-2 right-2 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity bg-white/20 hover:bg-white/30 shadow-sm"
+            class="rounded-sm p-1.5 text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white"
             onclick={startEdit}
             title="Edit message"
+            aria-label="Edit message"
           >
-            <Pencil class="w-4 h-4" />
+            <Pencil class="h-3.5 w-3.5" />
           </button>
         {/if}
-      {/if}
+      </div>
     {/if}
-  </div>
+  {/if}
 </div>
 
 <!-- Full-size image modal -->
 {#if modalImageUrl}
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
     onclick={(e) => closeModal(e)}
     onkeydown={handleModalKeyDown}
     role="button"
     tabindex="-1"
   >
     <button
-      class="absolute top-4 right-4 p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
+      class="absolute right-4 top-4 rounded-sm border border-border bg-surface p-2 text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white"
       onclick={() => closeModal()}
       title="Close"
+      aria-label="Close"
     >
-      <X class="w-6 h-6" />
+      <X class="h-5 w-5" />
     </button>
     <img
       src={modalImageUrl}
       alt=""
-      class="max-w-full max-h-full rounded pointer-events-none"
+      class="pointer-events-none max-h-full max-w-full rounded-sm"
     />
   </div>
 {/if}
@@ -341,9 +414,9 @@
 <style>
   .prose :global(pre) {
     position: relative;
-    background-color: var(--color-surface);
-    border: 1px solid var(--color-border, rgba(128, 128, 128, 0.2));
-    border-radius: 0.375rem;
+    background-color: #09090b;
+    border: 1px solid #27272a;
+    border-radius: 2px;
     padding: 0.75rem;
     padding-right: 2.5rem;
     overflow-x: auto;
@@ -358,26 +431,27 @@
     align-items: center;
     justify-content: center;
     padding: 0.25rem;
-    border-radius: 0.25rem;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-txtsecondary);
+    border-radius: 2px;
+    border: 1px solid #3f3f46;
+    background: #18181b;
+    color: #71717a;
     cursor: pointer;
-    transition: background-color 0.15s;
+    transition: all 150ms ease;
     line-height: 0;
   }
 
   .prose :global(.code-copy-btn:hover) {
-    background: var(--color-secondary);
+    background: #27272a;
+    color: #e4e4e7;
   }
 
   .prose :global(.code-copy-btn.copied) {
-    color: var(--color-success);
+    color: #22c55e;
     opacity: 1;
   }
 
   .prose :global(code) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
     font-size: 0.875em;
   }
 
@@ -387,10 +461,10 @@
   }
 
   .prose :global(code:not(pre code)) {
-    background-color: var(--color-surface);
+    background-color: #09090b;
     padding: 0.125rem 0.25rem;
-    border-radius: 0.25rem;
-    border: 1px solid var(--color-border, rgba(128, 128, 128, 0.2));
+    border-radius: 2px;
+    border: 1px solid #27272a;
   }
 
   .prose :global(p) {
@@ -431,15 +505,20 @@
   }
 
   .prose :global(blockquote) {
-    border-left: 3px solid var(--color-primary);
+    border-left: 3px solid #3f3f46;
     padding-left: 1rem;
     margin: 0.5rem 0;
     font-style: italic;
+    color: #a1a1aa;
   }
 
   .prose :global(a) {
-    color: var(--color-primary);
+    color: #a1a1aa;
     text-decoration: underline;
+  }
+
+  .prose :global(a:hover) {
+    color: #e4e4e7;
   }
 
   .prose :global(table) {
@@ -450,18 +529,30 @@
 
   .prose :global(th),
   .prose :global(td) {
-    border: 1px solid var(--color-border, rgba(128, 128, 128, 0.2));
+    border: 1px solid #27272a;
     padding: 0.5rem;
     text-align: left;
   }
 
   .prose :global(th) {
-    background-color: var(--color-surface);
+    background-color: #18181b;
     font-weight: 600;
   }
 
-  /* Highlight.js theme overrides for dark mode */
-  :global(.dark) .prose :global(.hljs) {
+  .prose :global(.hljs) {
     background: transparent;
+  }
+
+  .loading-progress {
+    animation: loading-progress 1.4s ease-in-out infinite;
+  }
+
+  @keyframes loading-progress {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(200%);
+    }
   }
 </style>

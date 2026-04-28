@@ -97,25 +97,31 @@ func (pg *ProcessGroup) GetMember(modelName string) (*Process, bool) {
 }
 
 func (pg *ProcessGroup) StopProcess(modelID string, strategy StopStrategy) error {
-	pg.Lock()
-
 	process, exists := pg.processes[modelID]
 	if !exists {
-		pg.Unlock()
 		return fmt.Errorf("process not found for %s", modelID)
 	}
 
+	if strategy == StopImmediately {
+		process.StopImmediately()
+
+		go func() {
+			pg.Lock()
+			if pg.lastUsedProcess == modelID {
+				pg.lastUsedProcess = ""
+			}
+			pg.Unlock()
+		}()
+		return nil
+	}
+
+	pg.Lock()
 	if pg.lastUsedProcess == modelID {
 		pg.lastUsedProcess = ""
 	}
 	pg.Unlock()
 
-	switch strategy {
-	case StopImmediately:
-		process.StopImmediately()
-	default:
-		process.Stop()
-	}
+	process.Stop()
 	return nil
 }
 

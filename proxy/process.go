@@ -40,6 +40,8 @@ const (
 	StopWaitForInflightRequest
 )
 
+const immediateStopTimeout = time.Second
+
 type Process struct {
 	ID           string
 	config       config.ModelConfig
@@ -62,8 +64,9 @@ type Process struct {
 	lastRequestHandledMutex sync.RWMutex
 	lastRequestHandled      time.Time
 
-	stateMutex sync.RWMutex
-	state      ProcessState
+	stateMutex     sync.RWMutex
+	state          ProcessState
+	stateChangedAt time.Time
 
 	inFlightRequests      sync.WaitGroup
 	inFlightRequestsCount atomic.Int32
@@ -116,6 +119,7 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 		healthCheckTimeout:      healthCheckTimeout,
 		healthCheckLoopInterval: 5 * time.Second, /* default, can not be set by user - used for testing */
 		state:                   StateStopped,
+		stateChangedAt:          time.Now(),
 
 		// concurrency limit
 		concurrencyLimitSemaphore: make(chan struct{}, concurrentLimit),
@@ -169,6 +173,7 @@ func (p *Process) swapState(expectedState, newState ProcessState) (ProcessState,
 	}
 
 	p.state = newState
+	p.stateChangedAt = time.Now()
 
 	// Atomically increment waitStarting when entering StateStarting
 	// This ensures any thread that sees StateStarting will also see the WaitGroup counter incremented
@@ -204,13 +209,25 @@ func (p *Process) CurrentState() ProcessState {
 	return p.state
 }
 
+func (p *Process) CurrentStateChangedAt() time.Time {
+	p.stateMutex.RLock()
+	defer p.stateMutex.RUnlock()
+	return p.stateChangedAt
+}
+
 // forceState forces the process state to the new state with mutex protection.
 // This should only be used in exceptional cases where the normal state transition
 // validation via swapState() cannot be used.
 func (p *Process) forceState(newState ProcessState) {
 	p.stateMutex.Lock()
-	defer p.stateMutex.Unlock()
+	oldState := p.state
 	p.state = newState
+	p.stateChangedAt = time.Now()
+	p.stateMutex.Unlock()
+
+	if oldState != newState {
+		event.Emit(ProcessStateChangeEvent{ProcessName: p.ID, NewState: newState, OldState: oldState})
+	}
 }
 
 // start starts the upstream command, checks the health endpoint, and sets the state to Ready
@@ -381,17 +398,18 @@ func (p *Process) Stop() {
 // StopImmediately will transition the process to the stopping state and stop the process with a SIGTERM.
 // If the process does not stop within the specified timeout, it will be forcefully stopped with a SIGKILL.
 func (p *Process) StopImmediately() {
-	if !isValidTransition(p.CurrentState(), StateStopping) {
+	currentState := p.CurrentState()
+	if !isValidTransition(currentState, StateStopping) {
 		return
 	}
 
-	p.proxyLogger.Debugf("<%s> Stopping process, current state: %s", p.ID, p.CurrentState())
-	if curState, err := p.swapState(StateReady, StateStopping); err != nil {
-		p.proxyLogger.Infof("<%s> Stop() Ready -> StateStopping err: %v, current state: %v", p.ID, err, curState)
+	p.proxyLogger.Debugf("<%s> Stopping process, current state: %s", p.ID, currentState)
+	if curState, err := p.swapState(currentState, StateStopping); err != nil {
+		p.proxyLogger.Infof("<%s> Stop() %s -> StateStopping err: %v, current state: %v", p.ID, currentState, err, curState)
 		return
 	}
 
-	p.stopCommand()
+	p.stopCommandWithTimeout(immediateStopTimeout)
 }
 
 // Shutdown is called when llama-swap is shutting down. It will give a little bit
@@ -411,6 +429,10 @@ func (p *Process) Shutdown() {
 // stopCommand will send a SIGTERM to the process and wait for it to exit.
 // If it does not exit within 5 seconds, it will send a SIGKILL.
 func (p *Process) stopCommand() {
+	p.stopCommandWithTimeout(p.gracefulStopTimeout)
+}
+
+func (p *Process) stopCommandWithTimeout(forceAfter time.Duration) {
 	stopStartTime := time.Now()
 	defer func() {
 		p.proxyLogger.Debugf("<%s> stopCommand took %v", p.ID, time.Since(stopStartTime))
@@ -419,10 +441,20 @@ func (p *Process) stopCommand() {
 		p.processLogger.Clear()
 	}()
 
-	p.cmdMutex.RLock()
-	cancelUpstream := p.cancelUpstream
-	cmdWaitChan := p.cmdWaitChan
-	p.cmdMutex.RUnlock()
+	var cancelUpstream context.CancelFunc
+	var cmdWaitChan chan struct{}
+	for attempts := 0; attempts < 20; attempts++ {
+		p.cmdMutex.RLock()
+		cancelUpstream = p.cancelUpstream
+		cmdWaitChan = p.cmdWaitChan
+		p.cmdMutex.RUnlock()
+
+		if cancelUpstream != nil {
+			break
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	if cancelUpstream == nil {
 		p.proxyLogger.Errorf("<%s> stopCommand has a nil p.cancelUpstream()", p.ID)
@@ -430,7 +462,29 @@ func (p *Process) stopCommand() {
 	}
 
 	cancelUpstream()
-	<-cmdWaitChan
+	timer := time.NewTimer(forceAfter)
+	defer timer.Stop()
+
+	select {
+	case <-cmdWaitChan:
+		return
+	case <-timer.C:
+		p.cmdMutex.RLock()
+		cmd := p.cmd
+		p.cmdMutex.RUnlock()
+
+		if cmd == nil || cmd.Process == nil {
+			p.proxyLogger.Debugf("<%s> stopCommand force kill skipped, process is nil", p.ID)
+			<-cmdWaitChan
+			return
+		}
+
+		p.proxyLogger.Warnf("<%s> stopCommand force killing process after %v", p.ID, forceAfter)
+		if err := forceKillProcess(cmd); err != nil {
+			p.proxyLogger.Errorf("<%s> stopCommand force kill failed: %v", p.ID, err)
+		}
+		<-cmdWaitChan
+	}
 }
 
 func (p *Process) checkHealthEndpoint(healthURL string) error {

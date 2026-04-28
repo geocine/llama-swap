@@ -62,46 +62,46 @@
 </script>
 
 <div class="p-2">
-  <h1 class="text-2xl font-bold">Activity</h1>
+  <h1 class="text-sm font-bold uppercase tracking-wide">Activity</h1>
 
   {#if $metrics.length === 0}
     <div class="text-center py-8">
-      <p class="text-gray-600">No metrics data available</p>
+      <p class="text-sm text-txtsecondary">No metrics data available</p>
     </div>
   {:else}
     <div class="card overflow-auto">
-      <table class="min-w-full divide-y">
-        <thead class="border-gray-200 dark:border-white/10">
-          <tr class="text-left text-xs uppercase tracking-wider">
-            <th class="px-6 py-3">ID</th>
-            <th class="px-6 py-3">Time</th>
-            <th class="px-6 py-3">Model</th>
-            <th class="px-6 py-3">
+      <table class="min-w-full divide-y divide-border">
+        <thead>
+          <tr class="text-left text-[10px] font-bold uppercase tracking-widest text-txtsecondary">
+            <th class="px-4 py-3">ID</th>
+            <th class="px-4 py-3">Time</th>
+            <th class="px-4 py-3">Model</th>
+            <th class="px-4 py-3">
               Cached <Tooltip content="prompt tokens from cache" />
             </th>
-            <th class="px-6 py-3">
+            <th class="px-4 py-3">
               Prompt <Tooltip content="new prompt tokens processed" />
             </th>
-            <th class="px-6 py-3">Generated</th>
-            <th class="px-6 py-3">Prompt Processing</th>
-            <th class="px-6 py-3">Generation Speed</th>
-            <th class="px-6 py-3">Duration</th>
-            <th class="px-6 py-3">Capture</th>
+            <th class="px-4 py-3">Generated</th>
+            <th class="px-4 py-3">Prompt Processing</th>
+            <th class="px-4 py-3">Generation Speed</th>
+            <th class="px-4 py-3">Duration</th>
+            <th class="px-4 py-3">Capture</th>
           </tr>
         </thead>
-        <tbody class="divide-y">
+        <tbody class="divide-y divide-border">
           {#each sortedMetrics as metric (metric.id)}
-            <tr class="whitespace-nowrap text-sm border-gray-200 dark:border-white/10">
-              <td class="px-4 py-4">{metric.id + 1}</td>
-              <td class="px-6 py-4">{formatRelativeTime(metric.timestamp)}</td>
-              <td class="px-6 py-4">{metric.model}</td>
-              <td class="px-6 py-4">{metric.cache_tokens > 0 ? metric.cache_tokens.toLocaleString() : "-"}</td>
-              <td class="px-6 py-4">{metric.input_tokens.toLocaleString()}</td>
-              <td class="px-6 py-4">{metric.output_tokens.toLocaleString()}</td>
-              <td class="px-6 py-4">{formatSpeed(metric.prompt_per_second)}</td>
-              <td class="px-6 py-4">{formatSpeed(metric.tokens_per_second)}</td>
-              <td class="px-6 py-4">{formatDuration(metric.duration_ms)}</td>
-              <td class="px-6 py-4">
+            <tr class="whitespace-nowrap text-sm hover:bg-secondary transition-colors duration-150">
+              <td class="px-4 py-3 font-mono text-txtsecondary">{metric.id + 1}</td>
+              <td class="px-4 py-3 font-mono text-txtsecondary">{formatRelativeTime(metric.timestamp)}</td>
+              <td class="px-4 py-3 font-mono">{metric.model}</td>
+              <td class="px-4 py-3 font-mono">{metric.cache_tokens > 0 ? metric.cache_tokens.toLocaleString() : "-"}</td>
+              <td class="px-4 py-3 font-mono">{metric.input_tokens.toLocaleString()}</td>
+              <td class="px-4 py-3 font-mono">{metric.output_tokens.toLocaleString()}</td>
+              <td class="px-4 py-3 font-mono">{formatSpeed(metric.prompt_per_second)}</td>
+              <td class="px-4 py-3 font-mono">{formatSpeed(metric.tokens_per_second)}</td>
+              <td class="px-4 py-3 font-mono">{formatDuration(metric.duration_ms)}</td>
+              <td class="px-4 py-3">
                 {#if metric.has_capture}
                   <button
                     onclick={() => viewCapture(metric.id)}
