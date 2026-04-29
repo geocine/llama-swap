@@ -1,7 +1,13 @@
 {
   "name": "llama-swap",
   "short_name": "llama-swap",
+  "description": "Transparent proxy with automatic model swapping for llama.cpp. QuickPod fork.",
   "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
     {
       "src": "/web-app-manifest-192x192.png",
       "sizes": "192x192",
@@ -15,7 +21,7 @@
       "purpose": "maskable"
     }
   ],
-  "theme_color": "#ffffff",
-  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "background_color": "#000000",
   "display": "standalone"
 }

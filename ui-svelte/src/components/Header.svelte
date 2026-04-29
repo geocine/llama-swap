@@ -5,6 +5,7 @@
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
   import ConnectionStatus from "./ConnectionStatus.svelte";
+  import Logo from "./Logo.svelte";
 
   function handleTitleChange(newTitle: string): void {
     const sanitized = newTitle.replace(/\n/g, "").trim().substring(0, 64) || "llama-swap";
@@ -39,16 +40,33 @@
     ? 'py-1 h-[48px]'
     : 'py-2 h-[56px]'}"
 >
-  {#if $screenWidth !== "xs" && $screenWidth !== "sm"}
-    <h1
-      contenteditable="true"
-      class="p-0 text-sm font-bold uppercase tracking-wide outline-none hover:text-white transition-colors duration-150 cursor-text"
-      onblur={handleBlur}
-      onkeydown={handleKeyDown}
+  <div class="flex items-center gap-2.5">
+    <a
+      href="/"
+      use:link
+      title="Home"
+      aria-label="Home"
+      class="inline-flex h-7 w-7 items-center justify-center rounded-sm border border-border bg-surface text-white outline-none transition-colors duration-150 hover:border-border-hover focus:outline-none focus-visible:border-border-hover"
     >
-      {$appTitle}
-    </h1>
-  {/if}
+      <Logo size={16} />
+    </a>
+    {#if $screenWidth !== "xs" && $screenWidth !== "sm"}
+      <div class="flex items-baseline gap-1.5">
+        <h1
+          contenteditable="true"
+          class="p-0 font-mono text-sm font-bold tracking-tight text-txtmain outline-none transition-colors duration-150 hover:text-white cursor-text"
+          onblur={handleBlur}
+          onkeydown={handleKeyDown}
+          spellcheck="false"
+        >
+          {$appTitle}
+        </h1>
+        <span class="font-mono text-[10px] font-bold uppercase tracking-widest text-txtmuted">
+          QuickPod
+        </span>
+      </div>
+    {/if}
+  </div>
 
   <menu class="flex items-center gap-1 overflow-x-auto">
     <a

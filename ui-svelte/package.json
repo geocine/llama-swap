@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "gen:favicons": "node scripts/generate-favicons.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
@@ -17,6 +18,8 @@
     "@tsconfig/svelte": "^5.0.4",
     "@types/hast": "^3.0.4",
     "@types/node": "^25.1.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
     "svelte": "^5.19.0",
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.1.8",

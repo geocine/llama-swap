@@ -30,9 +30,15 @@
     return $authReady && (!$authRequired || $isAuthenticated);
   }
 
+  // Reflect the live SSE connection state in the tab title using plain text
+  // instead of coloured-circle emoji. The base title is left untouched while
+  // connected so normal operation reads cleanly; transient and error states
+  // are surfaced with a short prefix.
   $effect(() => {
-    const icon = $connectionState === "connecting" ? "\u{1F7E1}" : $connectionState === "connected" ? "\u{1F7E2}" : "\u{1F534}";
-    document.title = `${icon} ${$appTitle}`;
+    let prefix = "";
+    if ($connectionState === "connecting") prefix = "connecting… · ";
+    else if ($connectionState === "disconnected") prefix = "offline · ";
+    document.title = `${prefix}${$appTitle}`;
   });
 
   $effect(() => {

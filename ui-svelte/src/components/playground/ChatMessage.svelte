@@ -1,9 +1,9 @@
 <script lang="ts">
   import { renderMarkdown, escapeHtml, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, LoaderCircle } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, LoaderCircle, Gauge } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
-  import type { ContentPart } from "../../lib/types";
+  import type { ContentPart, ChatMessageTimings } from "../../lib/types";
   import { formatElapsed } from "../../lib/modelLoading";
   import type { ChatModelLoadingState } from "../../lib/modelLoading";
 
@@ -12,6 +12,7 @@
     content: string | ContentPart[];
     reasoning_content?: string;
     reasoningTimeMs?: number;
+    timings?: ChatMessageTimings;
     isStreaming?: boolean;
     isReasoning?: boolean;
     loadingState?: ChatModelLoadingState | null;
@@ -24,12 +25,40 @@
     content,
     reasoning_content = "",
     reasoningTimeMs = 0,
+    timings,
     isStreaming = false,
     isReasoning = false,
     loadingState = null,
     onEdit,
     onRegenerate,
   }: Props = $props();
+
+  // Tokens/sec — match the server-side formula used in metrics_monitor.go
+  // (predicted_n / predicted_ms * 1000) so the value matches the Activity
+  // table exactly. Prefer the raw counts over the server's pre-computed
+  // predicted_per_second so we always reflect the most recent cumulative
+  // n/ms even when a chunk omits the pre-computed field.
+  let tokensPerSecond = $derived.by(() => {
+    if (!timings) return 0;
+    if (timings.predicted_n && timings.predicted_ms && timings.predicted_ms > 0) {
+      return (timings.predicted_n / timings.predicted_ms) * 1000;
+    }
+    if (timings.predicted_per_second && timings.predicted_per_second > 0) {
+      return timings.predicted_per_second;
+    }
+    return 0;
+  });
+  let promptTokensPerSecond = $derived.by(() => {
+    if (!timings) return 0;
+    if (timings.prompt_n && timings.prompt_ms && timings.prompt_ms > 0) {
+      return (timings.prompt_n / timings.prompt_ms) * 1000;
+    }
+    if (timings.prompt_per_second && timings.prompt_per_second > 0) {
+      return timings.prompt_per_second;
+    }
+    return 0;
+  });
+  let hasTimings = $derived(tokensPerSecond > 0 || (timings?.predicted_n ?? 0) > 0);
 
   let textContent = $derived(getTextContent(content));
   let imageUrls = $derived(getImageUrls(content));
@@ -174,10 +203,28 @@
 
 <div class="group flex flex-col {role === 'user' ? 'items-end' : 'items-start'} gap-3 py-6">
   {#if role === "assistant"}
-    <!-- Role label -->
-    <div class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-txtsecondary">
-      <span class="h-1 w-1 rounded-full {loadingState ? 'animate-pulse bg-warning' : 'bg-success'}"></span>
-      Assistant
+    <!-- Role label + live tokens/sec indicator -->
+    <div class="flex w-full items-center gap-3 font-mono text-[10px] uppercase leading-none tracking-widest text-txtsecondary">
+      <div class="inline-flex items-center gap-2 leading-none">
+        <span class="block h-1 w-1 shrink-0 rounded-full {loadingState ? 'animate-pulse bg-warning' : 'bg-success'}"></span>
+        <span class="leading-none">Assistant</span>
+      </div>
+      {#if hasTimings}
+        <div
+          class="inline-flex items-center gap-1.5 leading-none text-txtmuted"
+          title={(timings?.predicted_n ? `${timings.predicted_n} tokens` : "") +
+            (timings?.predicted_ms ? ` · ${formatDuration(timings.predicted_ms)}` : "") +
+            (promptTokensPerSecond > 0 ? ` · prompt ${promptTokensPerSecond.toFixed(2)} t/s` : "")}
+        >
+          <Gauge class="h-3 w-3 shrink-0" />
+          <span class="tabular-nums leading-none">
+            {tokensPerSecond.toFixed(2)} t/s
+          </span>
+          {#if !isStreaming && timings?.predicted_n}
+            <span class="leading-none text-txtmuted">· {timings.predicted_n} tok</span>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     {#if loadingState}

@@ -4,25 +4,46 @@
   import { streamChatCompletion } from "../../lib/chatApi";
   import { getChatModelLoadingState } from "../../lib/modelLoading";
   import { playgroundStores } from "../../stores/playgroundActivity";
+  import {
+    activeConversation,
+    conversations,
+    currentChatId,
+    ensureActiveConversation,
+    newConversation,
+    setMessages as setActiveMessages,
+  } from "../../stores/chats";
   import type { ChatMessage, ContentPart } from "../../lib/types";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import ModelSelector from "./ModelSelector.svelte";
-  import { ImageIcon, Plus, Send, Settings, Square, X } from "lucide-svelte";
+  import { ImageIcon, PanelLeftOpen, Plus, Send, Settings, Square, X } from "lucide-svelte";
+  import { get } from "svelte/store";
+  import { sidebarOpen } from "../../stores/playgroundUI";
 
   const selectedModelStore = persistentStore<string>("playground-selected-model", "");
   const systemPromptStore = persistentStore<string>("playground-system-prompt", "");
   const temperatureStore = persistentStore<number>("playground-temperature", 0.7);
 
-  function loadMessages(): ChatMessage[] {
-    try {
-      const saved = localStorage.getItem("playground-messages");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  }
+  // Ensure there is always an active conversation as soon as this component mounts
+  $effect(() => {
+    ensureActiveConversation();
+  });
 
-  let messages = $state<ChatMessage[]>(loadMessages());
+  // Messages live in the chats store; derive from the active conversation
+  let messages = $derived($activeConversation?.messages ?? []);
+
+  // Helper to update a specific conversation's messages — reads the freshest
+  // store value via get() so back-to-back synchronous updates during streaming
+  // never operate on stale state. Defaults to the active conversation but
+  // accepts an explicit id, so streams continue writing to their original
+  // conversation even if the user switches chats mid-stream.
+  function updateMessages(
+    updater: (current: ChatMessage[]) => ChatMessage[],
+    targetId?: string
+  ): void {
+    const id = targetId ?? get(currentChatId) ?? ensureActiveConversation();
+    const current = get(conversations).find((c) => c.id === id)?.messages ?? [];
+    setActiveMessages(id, updater(current));
+  }
   let userInput = $state("");
   let isStreaming = $state(false);
   let isReasoning = $state(false);
@@ -103,22 +124,7 @@
     return () => ro.disconnect();
   });
 
-  // Persist messages to localStorage (throttled to once per 2s)
-  let lastSaveTime = 0;
-  $effect(() => {
-    const json = JSON.stringify(messages);
-    const elapsed = Date.now() - lastSaveTime;
-    const save = () => {
-      try { localStorage.setItem("playground-messages", json); } catch {}
-      lastSaveTime = Date.now();
-    };
-    if (elapsed >= 2000) {
-      save();
-      return;
-    }
-    const timer = setTimeout(save, 2000 - elapsed);
-    return () => clearTimeout(timer);
-  });
+  // Persistence is handled inside the chats store (throttled).
 
   async function sendMessage() {
     const trimmedInput = userInput.trim();
@@ -142,7 +148,7 @@
     }
 
     // Add user message
-    messages = [...messages, { role: "user", content }];
+    updateMessages((curr) => [...curr, { role: "user", content }]);
     userInput = "";
     attachedImages = [];
     imageError = null;
@@ -164,17 +170,20 @@
     if (isStreaming) {
       cancelStreaming();
     }
-    messages = [];
+    // Always create a fresh conversation rather than clearing the active one,
+    // so previous chats stay in the sidebar history.
+    newConversation();
     isReasoning = false;
     reasoningStartTime = 0;
   }
 
   async function regenerateFromIndex(idx: number) {
-    // Remove all messages after the edited user message
-    messages = messages.slice(0, idx + 1);
+    // Snapshot the conversation id so streaming writes stay anchored even if
+    // the user switches chats while the request is in flight.
+    const streamChatId = get(currentChatId) ?? ensureActiveConversation();
 
-    // Add empty assistant message for the new response
-    messages = [...messages, { role: "assistant", content: "" }];
+    // Trim everything after the target message and append an empty assistant slot
+    updateMessages((curr) => [...curr.slice(0, idx + 1), { role: "assistant", content: "" }], streamChatId);
 
     isStreaming = true;
     isReasoning = false;
@@ -186,11 +195,13 @@
 
     try {
       // Build messages array with optional system prompt
+      const startMessages =
+        get(conversations).find((c) => c.id === streamChatId)?.messages ?? [];
       const apiMessages: ChatMessage[] = [];
       if ($systemPromptStore.trim()) {
         apiMessages.push({ role: "system", content: $systemPromptStore.trim() });
       }
-      apiMessages.push(...messages.slice(0, -1));
+      apiMessages.push(...startMessages.slice(0, -1));
 
       const stream = streamChatCompletion(
         $selectedModelStore,
@@ -212,10 +223,14 @@
           }
 
           // Update the last message with reasoning content
-          messages = messages.map((msg, i) =>
-            i === messages.length - 1
-              ? { ...msg, reasoning_content: (msg.reasoning_content || "") + chunk.reasoning_content }
-              : msg
+          updateMessages(
+            (curr) =>
+              curr.map((msg, i) =>
+                i === curr.length - 1
+                  ? { ...msg, reasoning_content: (msg.reasoning_content || "") + chunk.reasoning_content }
+                  : msg
+              ),
+            streamChatId
           );
         }
 
@@ -228,18 +243,33 @@
             isReasoning = false;
 
             // Update message with reasoning time
-            messages = messages.map((msg, i) =>
-              i === messages.length - 1
-                ? { ...msg, reasoningTimeMs }
-                : msg
+            updateMessages(
+              (curr) => curr.map((msg, i) => (i === curr.length - 1 ? { ...msg, reasoningTimeMs } : msg)),
+              streamChatId
             );
           }
 
           // Update the last message (assistant) with new content
-          messages = messages.map((msg, i) =>
-            i === messages.length - 1
-              ? { ...msg, content: msg.content + chunk.content }
-              : msg
+          updateMessages(
+            (curr) =>
+              curr.map((msg, i) =>
+                i === curr.length - 1 ? { ...msg, content: msg.content + chunk.content } : msg
+              ),
+            streamChatId
+          );
+        }
+
+        // Capture llama.cpp timings (sent on each chunk; final values arrive
+        // on the last chunk before [DONE]). Merge with previous so partial
+        // updates don't drop fields.
+        if (chunk.timings) {
+          const t = chunk.timings;
+          updateMessages(
+            (curr) =>
+              curr.map((msg, i) =>
+                i === curr.length - 1 ? { ...msg, timings: { ...(msg.timings || {}), ...t } } : msg
+              ),
+            streamChatId
           );
         }
       }
@@ -249,19 +279,20 @@
         // If we were still reasoning, record the time
         if (isReasoning && reasoningStartTime > 0) {
           const reasoningTimeMs = Date.now() - reasoningStartTime;
-          messages = messages.map((msg, i) =>
-            i === messages.length - 1
-              ? { ...msg, reasoningTimeMs }
-              : msg
+          updateMessages(
+            (curr) => curr.map((msg, i) => (i === curr.length - 1 ? { ...msg, reasoningTimeMs } : msg)),
+            streamChatId
           );
         }
       } else {
         // Show error in the assistant message
         const errorMessage = error instanceof Error ? error.message : "An error occurred";
-        messages = messages.map((msg, i) =>
-          i === messages.length - 1
-            ? { ...msg, content: msg.content + `\n\n**Error:** ${errorMessage}` }
-            : msg
+        updateMessages(
+          (curr) =>
+            curr.map((msg, i) =>
+              i === curr.length - 1 ? { ...msg, content: msg.content + `\n\n**Error:** ${errorMessage}` } : msg
+            ),
+          streamChatId
         );
       }
     } finally {
@@ -277,9 +308,7 @@
     if (isStreaming || !$selectedModelStore) return;
 
     // Update the user message at the specified index
-    messages = messages.map((msg, i) =>
-      i === idx ? { ...msg, content: newContent } : msg
-    );
+    updateMessages((curr) => curr.map((msg, i) => (i === idx ? { ...msg, content: newContent } : msg)));
 
     // Trigger a new chat request with the updated messages
     await regenerateFromIndex(idx);
@@ -357,7 +386,17 @@
 <div class="relative flex h-full min-h-0 flex-col">
   <!-- Top toolbar: model + actions -->
   <div class="shrink-0 px-1 pb-2 pt-2">
-    <div class="mx-auto flex max-w-[48rem] items-center gap-2">
+    <div class="mx-auto flex w-full max-w-[64rem] items-center gap-2">
+      {#if !$sidebarOpen}
+        <button
+          class="btn p-2"
+          onclick={() => sidebarOpen.set(true)}
+          title="Show history"
+          aria-label="Show history"
+        >
+          <PanelLeftOpen class="h-4 w-4" />
+        </button>
+      {/if}
       <ModelSelector bind:value={$selectedModelStore} placeholder="Select a model..." disabled={isStreaming} />
 
       <div class="ml-auto flex items-center gap-2">
@@ -385,7 +424,7 @@
 
   <!-- Settings drawer -->
   {#if showSettings}
-    <div class="mx-auto mb-3 w-full max-w-[48rem] shrink-0 rounded-sm border border-border bg-surface p-4">
+    <div class="mx-auto mb-3 w-full max-w-[64rem] shrink-0 rounded-sm border border-border bg-surface p-4">
       <div class="mb-4">
         <label
           class="mb-2 block text-[10px] font-bold uppercase tracking-widest text-txtsecondary"
@@ -440,7 +479,7 @@
   {:else if isEmpty}
     <!-- Empty / welcome state: centered headline + composer -->
     <div class="flex flex-1 items-center justify-center px-1 pb-12">
-      <div class="w-full max-w-[48rem]">
+      <div class="w-full max-w-[64rem]">
         <div class="mb-10 text-center">
           <h1 class="mb-3 text-3xl font-bold tracking-tight text-txtmain md:text-4xl">
             What can I help with?
@@ -459,14 +498,16 @@
       bind:this={scrollContainer}
       onscroll={handleScroll}
       class="min-h-0 flex-1 overflow-y-auto px-1"
+      style="scrollbar-gutter: stable both-edges;"
     >
-      <div class="mx-auto w-full max-w-[48rem] pt-2" style="padding-bottom: calc(var(--composer-height, 9rem) + 2rem);">
+      <div class="mx-auto w-full max-w-[64rem] pt-2" style="padding-bottom: calc(var(--composer-height, 9rem) + 2rem);">
         {#each messages as message, idx (idx)}
           <ChatMessageComponent
             role={message.role}
             content={message.content}
             reasoning_content={message.reasoning_content}
             reasoningTimeMs={message.reasoningTimeMs}
+            timings={message.timings}
             isStreaming={isStreaming && idx === messages.length - 1 && message.role === "assistant"}
             isReasoning={isReasoning && idx === messages.length - 1 && message.role === "assistant"}
             loadingState={idx === messages.length - 1 && message.role === "assistant" ? modelLoadingState : null}
@@ -484,7 +525,7 @@
       <!-- Short, hard fade just at the top edge of the composer area -->
       <div class="pointer-events-none h-3 bg-gradient-to-t from-background to-transparent"></div>
       <div class="pointer-events-auto bg-background pb-4">
-        <div class="mx-auto max-w-[48rem] px-1">
+        <div class="mx-auto w-full max-w-[64rem] px-1">
           {@render composer()}
         </div>
       </div>

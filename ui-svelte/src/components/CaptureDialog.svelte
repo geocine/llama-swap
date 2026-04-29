@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ReqRespCapture } from "../lib/types";
+  import { X } from "lucide-svelte";
 
   interface Props {
     capture: ReqRespCapture | null;
@@ -192,7 +193,7 @@
 <dialog
   bind:this={dialogEl}
   onclose={handleDialogClose}
-  class="bg-surface text-txtmain rounded-sm shadow-2xl max-w-4xl w-full max-h-[90vh] p-0 backdrop:bg-black/70 m-auto border border-border"
+  class="bg-surface text-txtmain rounded-sm shadow-2xl max-w-4xl w-full max-h-[90vh] p-0 backdrop:bg-black/70 m-auto border border-border outline-none focus:outline-none"
 >
   {#if capture}
     <div class="flex flex-col max-h-[90vh]">
@@ -202,9 +203,11 @@
         <h2 class="text-sm font-bold uppercase tracking-wide pb-0">Capture #{capture.id + 1}{#if capture.req_path} <span class="text-xs font-mono font-normal text-txtsecondary normal-case tracking-normal">{capture.req_path}</span>{/if}</h2>
         <button
           onclick={() => dialogEl?.close()}
-          class="text-txtsecondary hover:text-white text-2xl leading-none transition-colors duration-150"
+          title="Close"
+          aria-label="Close"
+          class="inline-flex h-7 w-7 items-center justify-center rounded-sm text-txtsecondary outline-none transition-colors duration-150 hover:bg-secondary hover:text-white focus:outline-none focus-visible:bg-secondary focus-visible:text-white"
         >
-          &times;
+          <X class="h-4 w-4" />
         </button>
       </div>
 
@@ -216,9 +219,7 @@
           >
             Request Headers
           </summary>
-          <div
-            class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-48"
-          >
+          <div class="mt-2 bg-background rounded-sm border border-border overflow-x-auto">
             <table class="w-full text-sm">
               <tbody>
                 {#each Object.entries(capture.req_headers || {}) as [key, value]}
@@ -270,14 +271,14 @@
               </button>
             </div>
             <div
-              class="mt-1 bg-background rounded-sm border border-border overflow-auto max-h-96"
+              class="mt-1 bg-background rounded-sm border border-border overflow-x-auto"
             >
               <pre
                 class="p-3 text-sm font-mono whitespace-pre-wrap break-all text-zinc-400">{displayedRequestBody}</pre>
             </div>
           {:else}
             <div
-              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-x-auto"
             >
               <pre class="p-3 text-sm font-mono whitespace-pre-wrap break-all text-txtsecondary"
                 >(empty)</pre
@@ -293,9 +294,7 @@
           >
             Response Headers
           </summary>
-          <div
-            class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-48"
-          >
+          <div class="mt-2 bg-background rounded-sm border border-border overflow-x-auto">
             <table class="w-full text-sm">
               <tbody>
                 {#each Object.entries(capture.resp_headers || {}) as [key, value]}
@@ -320,7 +319,7 @@
           </summary>
           {#if isResponseImage && capture.resp_body}
             <div
-              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-x-auto"
             >
               <div class="p-3 flex justify-center">
                 <img
@@ -367,7 +366,7 @@
               </button>
             </div>
             <div
-              class="mt-1 bg-background rounded-sm border border-border overflow-auto max-h-96"
+              class="mt-1 bg-background rounded-sm border border-border overflow-x-auto"
             >
               {#if respBodyTab === "chat"}
                 <div class="p-3 text-sm space-y-3">
@@ -406,7 +405,7 @@
             </div>
           {:else if responseBodyRaw}
             <div
-              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-x-auto"
             >
               <div class="p-3 text-sm text-txtsecondary italic">
                 (binary data - {responseContentType || "unknown content type"})
@@ -414,7 +413,7 @@
             </div>
           {:else}
             <div
-              class="mt-2 bg-background rounded-sm border border-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded-sm border border-border overflow-x-auto"
             >
               <pre class="p-3 text-sm font-mono text-txtsecondary">(empty)</pre>
             </div>
@@ -423,7 +422,13 @@
       </div>
 
       <div class="p-4 border-t border-border flex justify-end">
-        <button onclick={() => dialogEl?.close()} class="btn"> Close </button>
+        <button
+          onclick={() => dialogEl?.close()}
+          class="btn flex items-center gap-2 outline-none focus:outline-none focus-visible:border-border-hover"
+        >
+          <X class="h-3.5 w-3.5" />
+          Close
+        </button>
       </div>
     </div>
   {/if}

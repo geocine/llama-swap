@@ -69,11 +69,22 @@ export type ImageContentPart = {
 
 export type ContentPart = TextContentPart | ImageContentPart;
 
+export interface ChatMessageTimings {
+  prompt_n?: number;
+  prompt_ms?: number;
+  prompt_per_second?: number;
+  predicted_n?: number;
+  predicted_ms?: number;
+  predicted_per_second?: number;
+  cache_n?: number;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string | ContentPart[];
   reasoning_content?: string;
   reasoningTimeMs?: number;
+  timings?: ChatMessageTimings;
 }
 
 export function getTextContent(content: string | ContentPart[]): string {
