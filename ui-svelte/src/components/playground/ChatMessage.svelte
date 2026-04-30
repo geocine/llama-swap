@@ -1,9 +1,9 @@
 <script lang="ts">
   import { renderMarkdown, escapeHtml, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, LoaderCircle, Gauge } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, LoaderCircle, Gauge, Archive, BookOpenText } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
-  import type { ContentPart, ChatMessageTimings } from "../../lib/types";
+  import type { ContentPart, ChatMessagePromptProgress, ChatMessageTimings } from "../../lib/types";
   import { formatElapsed } from "../../lib/modelLoading";
   import type { ChatModelLoadingState } from "../../lib/modelLoading";
 
@@ -13,6 +13,7 @@
     reasoning_content?: string;
     reasoningTimeMs?: number;
     timings?: ChatMessageTimings;
+    promptProgress?: ChatMessagePromptProgress;
     isStreaming?: boolean;
     isReasoning?: boolean;
     loadingState?: ChatModelLoadingState | null;
@@ -26,6 +27,7 @@
     reasoning_content = "",
     reasoningTimeMs = 0,
     timings,
+    promptProgress,
     isStreaming = false,
     isReasoning = false,
     loadingState = null,
@@ -58,23 +60,56 @@
     }
     return 0;
   });
-  let hasTimings = $derived(tokensPerSecond > 0 || (timings?.predicted_n ?? 0) > 0);
+  let promptProgressTokens = $derived(
+    promptProgress ? Math.max(0, promptProgress.processed - promptProgress.cache) : 0
+  );
+  let promptProgressTotal = $derived(
+    promptProgress ? Math.max(0, promptProgress.total - promptProgress.cache) : 0
+  );
+  let promptProgressPercent = $derived(
+    promptProgressTotal > 0 ? Math.min(100, Math.round((promptProgressTokens / promptProgressTotal) * 100)) : 0
+  );
+  let promptProgressTokensPerSecond = $derived(
+    promptProgress && promptProgressTokens > 0 && promptProgress.time_ms > 0
+      ? (promptProgressTokens / promptProgress.time_ms) * 1000
+      : 0
+  );
+  let hasTimings = $derived(
+    tokensPerSecond > 0 ||
+      (timings?.predicted_n ?? 0) > 0 ||
+      promptProgressTokens > 0 ||
+      promptTokensPerSecond > 0
+  );
 
   let textContent = $derived(getTextContent(content));
   let imageUrls = $derived(getImageUrls(content));
   let hasImages = $derived(imageUrls.length > 0);
   let canEdit = $derived(onEdit !== undefined && !hasImages);
+  const MARKDOWN_RENDER_LIMIT = 30_000;
+
+  let textContentForRender = $derived(
+    textContent.length > MARKDOWN_RENDER_LIMIT
+      ? `${textContent.slice(0, MARKDOWN_RENDER_LIMIT)}\n\n[message truncated for browser rendering]`
+      : textContent
+  );
+  let isRenderTruncated = $derived(textContentForRender.length !== textContent.length);
 
   let streamingCache = createStreamingCache();
   let renderedParts = $derived.by(() => {
     if (role !== "assistant") {
-      return { blocks: [{ id: -1, html: escapeHtml(textContent).replace(/\n/g, '<br>') }] as RenderedBlock[], pendingHtml: "" };
+      return { blocks: [{ id: -1, html: escapeHtml(textContentForRender).replace(/\n/g, '<br>') }] as RenderedBlock[], pendingHtml: "" };
+    }
+    if (isStreaming) {
+      return {
+        blocks: [{ id: -1, html: escapeHtml(textContentForRender).replace(/\n/g, '<br>') }] as RenderedBlock[],
+        pendingHtml: "",
+      };
     }
     if (!isStreaming) {
       streamingCache = createStreamingCache();
-      return { blocks: [{ id: -1, html: renderMarkdown(textContent) }] as RenderedBlock[], pendingHtml: "" };
+      return { blocks: [{ id: -1, html: renderMarkdown(textContentForRender) }] as RenderedBlock[], pendingHtml: "" };
     }
-    return renderStreamingMarkdown(textContent, streamingCache);
+    return renderStreamingMarkdown(textContentForRender, streamingCache);
   });
   let copied = $state(false);
   let showRaw = $state(false);
@@ -202,7 +237,19 @@
 </script>
 
 <div class="group flex flex-col {role === 'user' ? 'items-end' : 'items-start'} gap-3 py-6">
-  {#if role === "assistant"}
+  {#if role === "system"}
+    <div class="w-full rounded-sm border border-border bg-surface px-4 py-3">
+      <div class="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-txtsecondary">
+        <Archive class="h-3.5 w-3.5" />
+        <span>Compacted context</span>
+      </div>
+      <div class="prose prose-sm prose-invert max-w-none text-sm leading-6 text-txtmain" use:codeBlockCopy>
+        {#each renderedParts.blocks as block (block.id)}
+          {@html block.html}
+        {/each}
+      </div>
+    </div>
+  {:else if role === "assistant"}
     <!-- Role label + live tokens/sec indicator -->
     <div class="flex w-full items-center gap-3 font-mono text-[10px] uppercase leading-none tracking-widest text-txtsecondary">
       <div class="inline-flex items-center gap-2 leading-none">
@@ -214,13 +261,30 @@
           class="inline-flex items-center gap-1.5 leading-none text-txtmuted"
           title={(timings?.predicted_n ? `${timings.predicted_n} tokens` : "") +
             (timings?.predicted_ms ? ` · ${formatDuration(timings.predicted_ms)}` : "") +
+            (promptProgress ? ` · prompt ${promptProgressTokens}/${promptProgressTotal} (${promptProgressPercent}%)` : "") +
             (promptTokensPerSecond > 0 ? ` · prompt ${promptTokensPerSecond.toFixed(2)} t/s` : "")}
         >
-          <Gauge class="h-3 w-3 shrink-0" />
+          {#if promptProgress && isStreaming && (timings?.predicted_n ?? 0) === 0}
+            <BookOpenText class="h-3 w-3 shrink-0" />
+          {:else}
+            <Gauge class="h-3 w-3 shrink-0" />
+          {/if}
           <span class="tabular-nums leading-none">
-            {tokensPerSecond.toFixed(2)} t/s
+            {#if tokensPerSecond > 0}
+              {tokensPerSecond.toFixed(2)} t/s
+            {:else if promptProgressTokensPerSecond > 0}
+              {promptProgressTokensPerSecond.toFixed(2)} t/s
+            {:else}
+              0.00 t/s
+            {/if}
           </span>
           {#if !isStreaming && timings?.predicted_n}
+            <span class="leading-none text-txtmuted">· {timings.predicted_n} tok</span>
+          {:else if promptProgress && isStreaming && (timings?.predicted_n ?? 0) === 0}
+            <span class="leading-none text-txtmuted">
+              · {promptProgressTokens}/{promptProgressTotal} tok · {promptProgressPercent}%
+            </span>
+          {:else if isStreaming && timings?.predicted_n}
             <span class="leading-none text-txtmuted">· {timings.predicted_n} tok</span>
           {/if}
         </div>
@@ -301,10 +365,15 @@
 
     {#if showRaw}
       <div class="w-full whitespace-pre-wrap rounded-sm border border-border bg-surface-elevated p-3 font-mono text-sm text-txtmain">
-        {textContent}
+        {textContentForRender}
       </div>
     {:else}
       <div class="prose prose-sm prose-invert w-full max-w-none leading-7 text-txtmain" use:codeBlockCopy>
+        {#if isRenderTruncated}
+          <div class="mb-3 rounded-sm border border-warning/40 bg-warning/10 px-3 py-2 font-mono text-[11px] uppercase tracking-widest text-warning">
+            Message is too large to render fully in the browser.
+          </div>
+        {/if}
         {#each renderedParts.blocks as block (block.id)}
           {@html block.html}
         {/each}
@@ -398,9 +467,14 @@
           {/each}
         </div>
       {/if}
-      {#if textContent.trim()}
+      {#if textContentForRender.trim()}
         <div class="max-w-[80%]">
-          <div class="whitespace-pre-wrap rounded-sm border border-border bg-secondary px-4 py-2.5 text-sm leading-6 text-txtmain">{textContent}</div>
+          {#if isRenderTruncated}
+            <div class="mb-2 rounded-sm border border-warning/40 bg-warning/10 px-3 py-2 font-mono text-[11px] uppercase tracking-widest text-warning">
+              Message is too large to render fully in the browser.
+            </div>
+          {/if}
+          <div class="whitespace-pre-wrap rounded-sm border border-border bg-secondary px-4 py-2.5 text-sm leading-6 text-txtmain">{textContentForRender}</div>
         </div>
       {/if}
       <div

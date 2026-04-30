@@ -23,6 +23,7 @@ type Model struct {
 	Unlisted       bool       `json:"unlisted"`
 	PeerID         string     `json:"peerID"`
 	Aliases        []string   `json:"aliases,omitempty"`
+	ContextSize    int        `json:"contextSize,omitempty"`
 }
 
 func addApiHandlers(pm *ProxyManager) {
@@ -62,6 +63,9 @@ func (pm *ProxyManager) getModelStatus() []Model {
 
 	// Iterate over sorted keys
 	for _, modelID := range modelIDs {
+		modelConfig := pm.config.Models[modelID]
+		contextSize := configuredContextSize(modelConfig.SanitizedCommand)
+
 		// Get process state
 		processGroup := pm.findGroupByModelName(modelID)
 		state := "unknown"
@@ -87,23 +91,25 @@ func (pm *ProxyManager) getModelStatus() []Model {
 				state = stateStr
 				models = append(models, Model{
 					Id:             modelID,
-					Name:           pm.config.Models[modelID].Name,
-					Description:    pm.config.Models[modelID].Description,
+					Name:           modelConfig.Name,
+					Description:    modelConfig.Description,
 					State:          state,
 					StateChangedAt: &stateChangedAt,
-					Unlisted:       pm.config.Models[modelID].Unlisted,
-					Aliases:        pm.config.Models[modelID].Aliases,
+					Unlisted:       modelConfig.Unlisted,
+					Aliases:        modelConfig.Aliases,
+					ContextSize:    contextSize,
 				})
 				continue
 			}
 		}
 		models = append(models, Model{
 			Id:          modelID,
-			Name:        pm.config.Models[modelID].Name,
-			Description: pm.config.Models[modelID].Description,
+			Name:        modelConfig.Name,
+			Description: modelConfig.Description,
 			State:       state,
-			Unlisted:    pm.config.Models[modelID].Unlisted,
-			Aliases:     pm.config.Models[modelID].Aliases,
+			Unlisted:    modelConfig.Unlisted,
+			Aliases:     modelConfig.Aliases,
+			ContextSize: contextSize,
 		})
 	}
 
@@ -120,6 +126,46 @@ func (pm *ProxyManager) getModelStatus() []Model {
 	}
 
 	return models
+}
+
+var contextSizeFlags = map[string]bool{
+	"-c":             true,
+	"--ctx-size":     true,
+	"--ctx_size":     true,
+	"--context-size": true,
+	"--n-ctx":        true,
+	"--n_ctx":        true,
+}
+
+func configuredContextSize(sanitizedCommand func() ([]string, error)) int {
+	args, err := sanitizedCommand()
+	if err != nil {
+		return 0
+	}
+
+	for i, arg := range args {
+		if contextSizeFlags[arg] {
+			if i+1 >= len(args) {
+				return 0
+			}
+			return parsePositiveInt(args[i+1])
+		}
+
+		flag, value, found := strings.Cut(arg, "=")
+		if found && contextSizeFlags[flag] {
+			return parsePositiveInt(value)
+		}
+	}
+
+	return 0
+}
+
+func parsePositiveInt(value string) int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
 }
 
 func (pm *ProxyManager) apiGetModels(c *gin.Context) {

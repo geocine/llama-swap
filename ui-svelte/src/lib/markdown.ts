@@ -200,6 +200,12 @@ export interface StreamingCache {
   completeKey: string;
 }
 
+const MAX_MARKDOWN_RENDER_CHARS = 30_000;
+
+function renderPlainTextBlock(content: string): string {
+  return `<p>${escapeHtml(content).replace(/\n/g, "<br>")}</p>`;
+}
+
 export function createStreamingCache(): StreamingCache {
   return { blocks: [], nextId: 0, completeKey: "" };
 }
@@ -229,8 +235,7 @@ export function renderStreamingMarkdown(
 
   let pendingHtml = "";
   if (pending) {
-    const closed = closePendingBlock(pending);
-    pendingHtml = renderMarkdown(closed);
+    pendingHtml = renderMarkdown(closePendingBlock(pending));
   }
 
   return { blocks: cache.blocks, pendingHtml };
@@ -248,6 +253,10 @@ export function normalizeLatexDelimiters(text: string): string {
 export function renderMarkdown(content: string): string {
   if (!content) {
     return "";
+  }
+
+  if (content.length > MAX_MARKDOWN_RENDER_CHARS) {
+    return renderPlainTextBlock(`${content.slice(0, MAX_MARKDOWN_RENDER_CHARS)}\n\n[markdown rendering truncated for browser responsiveness]`);
   }
 
   try {

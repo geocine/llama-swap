@@ -61,9 +61,6 @@
         >
           {$appTitle}
         </h1>
-        <span class="font-mono text-[10px] font-bold uppercase tracking-widest text-txtmuted">
-          QuickPod
-        </span>
       </div>
     {/if}
   </div>
@@ -115,7 +112,7 @@
 
 <style>
   .activity-link {
-    background: linear-gradient(90deg, #6366f1, #8b5cf6, #a855f7, #8b5cf6, #6366f1);
+    background: linear-gradient(90deg, #71717a, #e4e4e7, #ffffff, #e4e4e7, #71717a);
     background-size: 200% 100%;
     -webkit-background-clip: text;
     background-clip: text;

@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatCompletionRequest } from "./types";
+import type { ChatMessage, ChatCompletionRequest, ChatMessagePromptProgress } from "./types";
 
 // Mirrors the `timings` block emitted by llama.cpp's OpenAI-compatible
 // chat completion endpoint. Fields can arrive incrementally during streaming
@@ -17,11 +17,22 @@ export interface StreamChunk {
   content: string;
   reasoning_content?: string;
   timings?: ChatTimings;
+  prompt_progress?: ChatMessagePromptProgress;
   done: boolean;
 }
 
 export interface ChatOptions {
   temperature?: number;
+  max_tokens?: number;
+}
+
+interface ChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string;
+      reasoning_content?: string;
+    };
+  }>;
 }
 
 function parseSSELine(line: string): StreamChunk | null {
@@ -42,9 +53,10 @@ function parseSSELine(line: string): StreamChunk | null {
     const reasoning_content = delta?.reasoning_content || "";
     // llama.cpp emits a top-level `timings` object on each chunk
     const timings = parsed.timings as ChatTimings | undefined;
+    const prompt_progress = parsed.prompt_progress as ChatMessagePromptProgress | undefined;
 
-    if (content || reasoning_content || timings) {
-      return { content, reasoning_content, timings, done: false };
+    if (content || reasoning_content || timings || prompt_progress) {
+      return { content, reasoning_content, timings, prompt_progress, done: false };
     }
     return null;
   } catch {
@@ -63,6 +75,9 @@ export async function* streamChatCompletion(
     messages,
     stream: true,
     temperature: options?.temperature,
+    max_tokens: options?.max_tokens,
+    return_progress: true,
+    timings_per_token: true,
   };
 
   const response = await fetch("/v1/chat/completions", {
@@ -121,4 +136,41 @@ export async function* streamChatCompletion(
   } finally {
     reader.releaseLock();
   }
+}
+
+export async function completeChatCompletion(
+  model: string,
+  messages: ChatMessage[],
+  signal?: AbortSignal,
+  options?: ChatOptions
+): Promise<string> {
+  const request: ChatCompletionRequest = {
+    model,
+    messages,
+    stream: false,
+    temperature: options?.temperature,
+    max_tokens: options?.max_tokens,
+  };
+
+  const response = await fetch("/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Chat API error: ${response.status} - ${errorText}`);
+  }
+
+  const parsed = (await response.json()) as ChatCompletionResponse;
+  const message = parsed.choices?.[0]?.message;
+  const content = message?.content || message?.reasoning_content || "";
+  if (!content.trim()) {
+    throw new Error("Compaction returned an empty summary");
+  }
+  return content;
 }

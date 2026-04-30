@@ -11,6 +11,7 @@ export interface Model {
   unlisted: boolean;
   peerID: string;
   aliases?: string[];
+  contextSize?: number;
 }
 
 export interface Metrics {
@@ -79,12 +80,26 @@ export interface ChatMessageTimings {
   cache_n?: number;
 }
 
+export interface ChatMessagePromptProgress {
+  total: number;
+  cache: number;
+  processed: number;
+  time_ms: number;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string | ContentPart[];
   reasoning_content?: string;
   reasoningTimeMs?: number;
   timings?: ChatMessageTimings;
+  promptProgress?: ChatMessagePromptProgress;
+  compaction?: {
+    kind: "summary";
+    createdAt: number;
+    summarizedMessageCount: number;
+    droppedMessageCount: number;
+  };
 }
 
 export function getTextContent(content: string | ContentPart[]): string {
@@ -110,6 +125,8 @@ export interface ChatCompletionRequest {
   stream: boolean;
   temperature?: number;
   max_tokens?: number;
+  return_progress?: boolean;
+  timings_per_token?: boolean;
 }
 
 export interface ImageGenerationRequest {

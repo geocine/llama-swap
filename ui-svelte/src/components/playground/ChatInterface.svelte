@@ -1,21 +1,30 @@
 <script lang="ts">
   import { models, unloadSingleModel } from "../../stores/api";
   import { persistentStore } from "../../stores/persistent";
-  import { streamChatCompletion } from "../../lib/chatApi";
-  import { getChatModelLoadingState } from "../../lib/modelLoading";
+  import { completeChatCompletion, streamChatCompletion } from "../../lib/chatApi";
+  import {
+    buildCompactionRequestMessages,
+    insertCompactSummary,
+    messagesForNextTurn,
+    planConversationCompaction,
+  } from "../../lib/compaction";
+  import { getChatModelLoadingState, resolveSelectedModel } from "../../lib/modelLoading";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import {
     activeConversation,
+    chatsReady,
     conversations,
     currentChatId,
     ensureActiveConversation,
     newConversation,
+    setConversationPersistencePaused,
     setMessages as setActiveMessages,
   } from "../../stores/chats";
-  import type { ChatMessage, ContentPart } from "../../lib/types";
+  import { getTextContent } from "../../lib/types";
+  import type { ChatMessage, ChatMessagePromptProgress, ChatMessageTimings, ContentPart } from "../../lib/types";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import ModelSelector from "./ModelSelector.svelte";
-  import { ImageIcon, PanelLeftOpen, Plus, Send, Settings, Square, X } from "lucide-svelte";
+  import { Archive, ImageIcon, PanelLeftOpen, Plus, Send, Settings, Square, X } from "lucide-svelte";
   import { get } from "svelte/store";
   import { sidebarOpen } from "../../stores/playgroundUI";
 
@@ -25,6 +34,7 @@
 
   // Ensure there is always an active conversation as soon as this component mounts
   $effect(() => {
+    if (!$chatsReady) return;
     ensureActiveConversation();
   });
 
@@ -44,6 +54,32 @@
     const current = get(conversations).find((c) => c.id === id)?.messages ?? [];
     setActiveMessages(id, updater(current));
   }
+
+  function buildRequestMessages(history: ChatMessage[]): ChatMessage[] {
+    const systemParts: string[] = [];
+    const systemPrompt = $systemPromptStore.trim();
+    if (systemPrompt) {
+      systemParts.push(systemPrompt);
+    }
+
+    const nonSystemMessages: ChatMessage[] = [];
+    for (const message of history) {
+      if (message.role === "system") {
+        const text = getTextContent(message.content).trim();
+        if (text) {
+          systemParts.push(text);
+        }
+      } else {
+        nonSystemMessages.push(message);
+      }
+    }
+
+    if (systemParts.length === 0) {
+      return nonSystemMessages;
+    }
+
+    return [{ role: "system", content: systemParts.join("\n\n") }, ...nonSystemMessages];
+  }
   let userInput = $state("");
   let isStreaming = $state(false);
   let isReasoning = $state(false);
@@ -59,12 +95,45 @@
   let requestStartedAt = $state(0);
   let hasReceivedOutput = $state(false);
   let now = $state(Date.now());
+  let isCompacting = $state(false);
+  let compactError = $state<string | null>(null);
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
   let userScrolledUp = $state(false);
   let isEmpty = $derived(messages.length === 0);
   let modelLoadingState = $derived(
     getChatModelLoadingState($models, $selectedModelStore, isStreaming, hasReceivedOutput, requestStartedAt, now)
+  );
+  let selectedModelInfo = $derived(resolveSelectedModel($models, $selectedModelStore));
+  let contextTotal = $derived(selectedModelInfo?.contextSize ?? 0);
+  let latestTimings = $derived.by(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.role === "assistant" && message.timings) {
+        return message.timings;
+      }
+    }
+    return null;
+  });
+  let latestPromptProgress = $derived.by(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.role === "assistant" && message.promptProgress) {
+        return message.promptProgress;
+      }
+    }
+    return null;
+  });
+  let contextUsed = $derived(calculateContextUsed(latestTimings, latestPromptProgress));
+  let contextAvailable = $derived(Math.max(0, contextTotal - contextUsed));
+  let contextPercent = $derived(
+    contextTotal > 0 ? Math.min(100, Math.round((contextUsed / contextTotal) * 100)) : 0
+  );
+  let outputUsed = $derived(latestTimings?.predicted_n ?? 0);
+  let liveTokensPerSecond = $derived(calculateLiveTokensPerSecond(latestTimings, latestPromptProgress));
+  let liveStatsText = $derived(buildLiveStatsText(contextUsed, contextTotal, contextPercent, outputUsed, liveTokensPerSecond));
+  let canCompact = $derived(
+    !isStreaming && !isCompacting && !!$selectedModelStore && messages.length > 7 && planConversationCompaction(messages, contextTotal) !== null
   );
 
   $effect(() => {
@@ -128,7 +197,7 @@
 
   async function sendMessage() {
     const trimmedInput = userInput.trim();
-    if ((!trimmedInput && attachedImages.length === 0) || !$selectedModelStore || isStreaming) return;
+    if (!$chatsReady || (!trimmedInput && attachedImages.length === 0) || !$selectedModelStore || isStreaming || isCompacting) return;
 
     userScrolledUp = false;
 
@@ -167,6 +236,7 @@
   }
 
   function newChat() {
+    if (!$chatsReady) return;
     if (isStreaming) {
       cancelStreaming();
     }
@@ -186,6 +256,7 @@
     updateMessages((curr) => [...curr.slice(0, idx + 1), { role: "assistant", content: "" }], streamChatId);
 
     isStreaming = true;
+    setConversationPersistencePaused(true);
     isReasoning = false;
     reasoningStartTime = 0;
     requestStartedAt = Date.now();
@@ -193,15 +264,77 @@
     hasReceivedOutput = false;
     abortController = new AbortController();
 
+    let pendingContent = "";
+    let pendingReasoning = "";
+    let pendingReasoningTimeMs: number | undefined;
+    let pendingPromptProgress: ChatMessagePromptProgress | undefined;
+    let pendingTimings: ChatMessageTimings | undefined;
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const flushStreamUpdate = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = undefined;
+      }
+      if (
+        !pendingContent &&
+        !pendingReasoning &&
+        pendingReasoningTimeMs === undefined &&
+        !pendingPromptProgress &&
+        !pendingTimings
+      ) {
+        return;
+      }
+
+      const contentDelta = pendingContent;
+      const reasoningDelta = pendingReasoning;
+      const reasoningTimeMs = pendingReasoningTimeMs;
+      const promptProgress = pendingPromptProgress;
+      const timings = pendingTimings;
+
+      pendingContent = "";
+      pendingReasoning = "";
+      pendingReasoningTimeMs = undefined;
+      pendingPromptProgress = undefined;
+      pendingTimings = undefined;
+
+      updateMessages(
+        (curr) =>
+          curr.map((msg, i) => {
+            if (i !== curr.length - 1) return msg;
+
+            const next: ChatMessage = { ...msg };
+            if (reasoningDelta) {
+              next.reasoning_content = (next.reasoning_content || "") + reasoningDelta;
+            }
+            if (contentDelta) {
+              const currentContent = typeof next.content === "string" ? next.content : getTextContent(next.content);
+              next.content = currentContent + contentDelta;
+            }
+            if (reasoningTimeMs !== undefined) {
+              next.reasoningTimeMs = reasoningTimeMs;
+            }
+            if (promptProgress) {
+              next.promptProgress = promptProgress;
+            }
+            if (timings) {
+              next.timings = { ...(next.timings || {}), ...timings };
+            }
+            return next;
+          }),
+        streamChatId
+      );
+    };
+
+    const scheduleStreamFlush = () => {
+      if (flushTimer) return;
+      flushTimer = setTimeout(flushStreamUpdate, 100);
+    };
+
     try {
-      // Build messages array with optional system prompt
       const startMessages =
         get(conversations).find((c) => c.id === streamChatId)?.messages ?? [];
-      const apiMessages: ChatMessage[] = [];
-      if ($systemPromptStore.trim()) {
-        apiMessages.push({ role: "system", content: $systemPromptStore.trim() });
-      }
-      apiMessages.push(...startMessages.slice(0, -1));
+      const apiMessages = buildRequestMessages(messagesForNextTurn(startMessages).slice(0, -1));
 
       const stream = streamChatCompletion(
         $selectedModelStore,
@@ -213,80 +346,47 @@
       for await (const chunk of stream) {
         if (chunk.done) break;
 
-        // Handle reasoning content
         if (chunk.reasoning_content) {
           hasReceivedOutput = true;
-          // Start timing on first reasoning content
           if (!isReasoning) {
             isReasoning = true;
             reasoningStartTime = Date.now();
           }
-
-          // Update the last message with reasoning content
-          updateMessages(
-            (curr) =>
-              curr.map((msg, i) =>
-                i === curr.length - 1
-                  ? { ...msg, reasoning_content: (msg.reasoning_content || "") + chunk.reasoning_content }
-                  : msg
-              ),
-            streamChatId
-          );
+          pendingReasoning += chunk.reasoning_content;
         }
 
-        // Handle regular content - end reasoning phase when we get content
         if (chunk.content) {
           hasReceivedOutput = true;
           if (isReasoning) {
-            // Calculate reasoning time
-            const reasoningTimeMs = Date.now() - reasoningStartTime;
+            pendingReasoningTimeMs = Date.now() - reasoningStartTime;
             isReasoning = false;
-
-            // Update message with reasoning time
-            updateMessages(
-              (curr) => curr.map((msg, i) => (i === curr.length - 1 ? { ...msg, reasoningTimeMs } : msg)),
-              streamChatId
-            );
           }
-
-          // Update the last message (assistant) with new content
-          updateMessages(
-            (curr) =>
-              curr.map((msg, i) =>
-                i === curr.length - 1 ? { ...msg, content: msg.content + chunk.content } : msg
-              ),
-            streamChatId
-          );
+          pendingContent += chunk.content;
         }
 
-        // Capture llama.cpp timings (sent on each chunk; final values arrive
-        // on the last chunk before [DONE]). Merge with previous so partial
-        // updates don't drop fields.
+        if (chunk.prompt_progress) {
+          pendingPromptProgress = chunk.prompt_progress;
+        }
+
         if (chunk.timings) {
-          const t = chunk.timings;
-          updateMessages(
-            (curr) =>
-              curr.map((msg, i) =>
-                i === curr.length - 1 ? { ...msg, timings: { ...(msg.timings || {}), ...t } } : msg
-              ),
-            streamChatId
-          );
+          pendingTimings = { ...(pendingTimings || {}), ...chunk.timings };
         }
+
+        scheduleStreamFlush();
       }
+      flushStreamUpdate();
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         // User cancelled, keep partial response
         // If we were still reasoning, record the time
         if (isReasoning && reasoningStartTime > 0) {
-          const reasoningTimeMs = Date.now() - reasoningStartTime;
-          updateMessages(
-            (curr) => curr.map((msg, i) => (i === curr.length - 1 ? { ...msg, reasoningTimeMs } : msg)),
-            streamChatId
-          );
+          pendingReasoningTimeMs = Date.now() - reasoningStartTime;
+          flushStreamUpdate();
         }
       } else {
         // Show error in the assistant message
         const errorMessage = error instanceof Error ? error.message : "An error occurred";
+        flushStreamUpdate();
         updateMessages(
           (curr) =>
             curr.map((msg, i) =>
@@ -296,7 +396,9 @@
         );
       }
     } finally {
+      flushStreamUpdate();
       isStreaming = false;
+      setConversationPersistencePaused(false);
       isReasoning = false;
       requestStartedAt = 0;
       hasReceivedOutput = false;
@@ -381,6 +483,91 @@
     attachedImages = attachedImages.filter((_, i) => i !== idx);
     imageError = null;
   }
+
+  async function compactChat() {
+    if (!canCompact) return;
+
+    const streamChatId = get(currentChatId) ?? ensureActiveConversation();
+    const sourceMessages = get(conversations).find((c) => c.id === streamChatId)?.messages ?? [];
+    const plan = planConversationCompaction(sourceMessages, contextTotal);
+    if (!plan) return;
+
+    isCompacting = true;
+    compactError = null;
+    setConversationPersistencePaused(true);
+    const controller = new AbortController();
+
+    try {
+      const summary = await completeChatCompletion(
+        $selectedModelStore,
+        buildCompactionRequestMessages(plan),
+        controller.signal,
+        {
+          temperature: 0.2,
+          max_tokens: contextTotal > 0 ? Math.min(4096, Math.max(1024, Math.floor(contextTotal * 0.08))) : 2048,
+        }
+      );
+      setActiveMessages(streamChatId, insertCompactSummary(sourceMessages, plan, summary));
+    } catch (error) {
+      compactError = error instanceof Error ? error.message : "Failed to compact conversation";
+    } finally {
+      isCompacting = false;
+      setConversationPersistencePaused(false);
+    }
+  }
+
+  function formatTokenCount(value: number): string {
+    if (value >= 1_000_000) {
+      return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+    }
+    if (value >= 10_000) {
+      return `${Math.round(value / 1000)}K`;
+    }
+    return value.toLocaleString();
+  }
+
+  function calculateContextUsed(timings: ChatMessageTimings | null, promptProgress: ChatMessagePromptProgress | null): number {
+    if (timings) {
+      return (timings.prompt_n ?? 0) + (timings.cache_n ?? 0) + (timings.predicted_n ?? 0);
+    }
+    if (promptProgress) {
+      return Math.max(0, promptProgress.processed);
+    }
+    return 0;
+  }
+
+  function calculateLiveTokensPerSecond(timings: ChatMessageTimings | null, promptProgress: ChatMessagePromptProgress | null): number {
+    if (timings?.predicted_n && timings.predicted_ms && timings.predicted_ms > 0) {
+      return (timings.predicted_n / timings.predicted_ms) * 1000;
+    }
+    if (timings?.predicted_per_second && timings.predicted_per_second > 0) {
+      return timings.predicted_per_second;
+    }
+    if (promptProgress && promptProgress.processed > promptProgress.cache && promptProgress.time_ms > 0) {
+      return ((promptProgress.processed - promptProgress.cache) / promptProgress.time_ms) * 1000;
+    }
+    return 0;
+  }
+
+  function buildLiveStatsText(
+    used: number,
+    total: number,
+    percent: number,
+    output: number,
+    tokensPerSecond: number
+  ): string {
+    const parts: string[] = [];
+    if (total > 0) {
+      parts.push(`Context: ${used.toLocaleString()}/${total.toLocaleString()} (${percent}%)`);
+    }
+    if (output > 0) {
+      parts.push(`Output: ${output.toLocaleString()}/∞`);
+    }
+    if (tokensPerSecond > 0) {
+      parts.push(`${tokensPerSecond.toFixed(1)} t/s`);
+    }
+    return parts.join(" · ");
+  }
 </script>
 
 <div class="relative flex h-full min-h-0 flex-col">
@@ -408,6 +595,15 @@
           aria-label="Settings"
         >
           <Settings class="h-4 w-4" />
+        </button>
+        <button
+          class="btn p-2"
+          onclick={compactChat}
+          disabled={!canCompact}
+          title="Compact context"
+          aria-label="Compact context"
+        >
+          <Archive class="h-4 w-4" />
         </button>
         <button
           class="btn p-2"
@@ -508,6 +704,7 @@
             reasoning_content={message.reasoning_content}
             reasoningTimeMs={message.reasoningTimeMs}
             timings={message.timings}
+            promptProgress={message.promptProgress}
             isStreaming={isStreaming && idx === messages.length - 1 && message.role === "assistant"}
             isReasoning={isReasoning && idx === messages.length - 1 && message.role === "assistant"}
             loadingState={idx === messages.length - 1 && message.role === "assistant" ? modelLoadingState : null}
@@ -566,6 +763,11 @@
         {imageError}
       </div>
     {/if}
+    {#if compactError}
+      <div class="mx-3 mt-3 rounded-sm border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
+        {compactError}
+      </div>
+    {/if}
 
     <!-- Hidden file input -->
     <input
@@ -582,8 +784,8 @@
       bind:this={textareaEl}
       bind:value={userInput}
       onkeydown={handleKeyDown}
-      disabled={isStreaming || !$selectedModelStore}
-      placeholder={$selectedModelStore ? "Send a message..." : "Select a model to start..."}
+      disabled={isStreaming || isCompacting || !$selectedModelStore}
+      placeholder={isCompacting ? "Compacting context..." : $selectedModelStore ? "Send a message..." : "Select a model to start..."}
       rows="1"
       class="block w-full resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 text-txtmain placeholder-zinc-700 outline-none disabled:opacity-50"
     ></textarea>
@@ -594,7 +796,7 @@
         <button
           class="btn p-2"
           onclick={() => fileInput?.click()}
-          disabled={isStreaming || !$selectedModelStore}
+          disabled={isStreaming || isCompacting || !$selectedModelStore}
           title="Attach image"
           aria-label="Attach image"
         >
@@ -603,6 +805,18 @@
         <span class="hidden font-mono text-[10px] uppercase tracking-widest text-txtmuted sm:inline">
           Enter to send · Shift+Enter for newline
         </span>
+        {#if contextTotal > 0}
+          <span
+            class="ml-2 hidden rounded-sm border border-border bg-black px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-txtsecondary md:inline"
+            title={liveStatsText || `${contextUsed.toLocaleString()} used / ${contextTotal.toLocaleString()} total (${contextPercent}%)`}
+          >
+            {#if liveStatsText}
+              {liveStatsText}
+            {:else}
+              CTX {formatTokenCount(contextAvailable)} left
+            {/if}
+          </span>
+        {/if}
       </div>
 
       {#if isStreaming}
@@ -610,11 +824,16 @@
           <Square class="h-3.5 w-3.5" />
           Stop
         </button>
+      {:else if isCompacting}
+        <button class="btn flex items-center gap-2" disabled>
+          <Archive class="h-3.5 w-3.5" />
+          Compacting
+        </button>
       {:else}
         <button
           class="btn btn-primary flex items-center gap-2"
           onclick={sendMessage}
-          disabled={(!userInput.trim() && attachedImages.length === 0) || !$selectedModelStore}
+          disabled={!$chatsReady || isCompacting || (!userInput.trim() && attachedImages.length === 0) || !$selectedModelStore}
         >
           <Send class="h-3.5 w-3.5" />
           Send
