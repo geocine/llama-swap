@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { downloadProgress, models, unloadSingleModel } from "../../stores/api";
+  import {
+    downloadProgress,
+    models,
+    unloadSingleModel,
+  } from "../../stores/api";
   import { persistentStore } from "../../stores/persistent";
   import { completeChatCompletion, streamChatCompletion } from "../../lib/chatApi";
   import {
@@ -23,6 +27,8 @@
   import { getTextContent } from "../../lib/types";
   import type { ChatMessage, ChatMessagePromptProgress, ChatMessageTimings, ContentPart } from "../../lib/types";
   import ChatMessageComponent from "./ChatMessage.svelte";
+  import ModelConfigDialog from "../ModelConfigDialog.svelte";
+  import ConfigImportExport from "../config/ConfigImportExport.svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import {
     Archive,
@@ -30,6 +36,7 @@
     Plus,
     Send,
     Settings,
+    SlidersHorizontal,
     X,
   } from "lucide-svelte";
   import { get } from "svelte/store";
@@ -109,6 +116,8 @@
   let now = $state(Date.now());
   let isCompacting = $state(false);
   let compactError = $state<string | null>(null);
+  let showModelConfig = $state(false);
+  let configMessage = $state<string | null>(null);
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
   let userScrolledUp = $state(false);
@@ -576,6 +585,10 @@
     }
   }
 
+  function setConfigStatusMessage(message: string): void {
+    configMessage = message;
+  }
+
   function formatTokenCount(value: number): string {
     if (value >= 1_000_000) {
       return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
@@ -630,6 +643,19 @@
       <div class="ml-auto flex items-center gap-2">
         <button
           class="btn p-2"
+          onclick={() => (showModelConfig = true)}
+          disabled={!selectedModelInfo || !!selectedModelInfo.peerID || isStreaming}
+          title="Configure model"
+          aria-label="Configure model"
+        >
+          <SlidersHorizontal class="h-4 w-4" />
+        </button>
+        <ConfigImportExport
+          buttonClass="btn p-2"
+          onstatus={setConfigStatusMessage}
+        />
+        <button
+          class="btn p-2"
           class:active={showSettings}
           onclick={() => (showSettings = !showSettings)}
           title="Settings"
@@ -678,6 +704,12 @@
           disabled={isStreaming}
         ></textarea>
       </div>
+    </div>
+  {/if}
+
+  {#if configMessage}
+    <div class="mx-auto mb-3 w-full max-w-[64rem] shrink-0 rounded-sm border border-border bg-surface px-3 py-2 text-xs text-txtsecondary">
+      {configMessage}
     </div>
   {/if}
 
@@ -745,6 +777,12 @@
     </div>
   {/if}
 </div>
+
+<ModelConfigDialog
+  open={showModelConfig}
+  modelId={selectedModelInfo?.id ?? ""}
+  onClose={() => (showModelConfig = false)}
+/>
 
 {#snippet composer()}
   <div

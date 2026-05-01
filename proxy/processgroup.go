@@ -24,9 +24,11 @@ type ProcessGroup struct {
 	// map of current processes
 	processes       map[string]*Process
 	lastUsedProcess string
+
+	configResolver func(modelID string) (config.ModelConfig, bool)
 }
 
-func NewProcessGroup(id string, config config.Config, proxyLogger *LogMonitor, upstreamLogger *LogMonitor) *ProcessGroup {
+func NewProcessGroup(id string, config config.Config, proxyLogger *LogMonitor, upstreamLogger *LogMonitor, configResolver ...func(modelID string) (config.ModelConfig, bool)) *ProcessGroup {
 	groupConfig, ok := config.Groups[id]
 	if !ok {
 		panic("Unable to find configuration for group id: " + id)
@@ -41,6 +43,9 @@ func NewProcessGroup(id string, config config.Config, proxyLogger *LogMonitor, u
 		proxyLogger:    proxyLogger,
 		upstreamLogger: upstreamLogger,
 		processes:      make(map[string]*Process),
+	}
+	if len(configResolver) > 0 {
+		pg.configResolver = configResolver[0]
 	}
 
 	// Create a Process for each member in the group
@@ -59,6 +64,8 @@ func (pg *ProcessGroup) ProxyRequest(modelID string, writer http.ResponseWriter,
 	if !pg.HasMember(modelID) {
 		return fmt.Errorf("model %s not part of group %s", modelID, pg.id)
 	}
+
+	pg.refreshProcessConfig(modelID)
 
 	if pg.swap {
 		pg.Lock()
@@ -83,6 +90,25 @@ func (pg *ProcessGroup) ProxyRequest(modelID string, writer http.ResponseWriter,
 
 	pg.processes[modelID].ProxyRequest(writer, request)
 	return nil
+}
+
+func (pg *ProcessGroup) refreshProcessConfig(modelID string) {
+	if pg.configResolver == nil {
+		return
+	}
+	modelConfig, ok := pg.configResolver(modelID)
+	if !ok {
+		return
+	}
+	pg.UpdateProcessConfigIfStopped(modelID, modelConfig)
+}
+
+func (pg *ProcessGroup) UpdateProcessConfigIfStopped(modelID string, modelConfig config.ModelConfig) {
+	process, exists := pg.processes[modelID]
+	if !exists {
+		return
+	}
+	process.UpdateConfigIfStopped(modelConfig)
 }
 
 func (pg *ProcessGroup) HasMember(modelName string) bool {

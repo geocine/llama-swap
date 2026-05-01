@@ -40,6 +40,11 @@ func addApiHandlers(pm *ProxyManager) {
 		apiGroup.GET("/models/", pm.apiGetModels)
 		apiGroup.POST("/models/unload", pm.apiUnloadAllModels)
 		apiGroup.POST("/models/unload/*model", pm.apiUnloadSingleModelHandler)
+		apiGroup.GET("/config/models", pm.apiGetModelConfigs)
+		apiGroup.PUT("/config/models/:model/settings", pm.apiPutModelConfigSettings)
+		apiGroup.DELETE("/config/models/:model/settings", pm.apiDeleteModelConfigSettings)
+		apiGroup.GET("/config/export", pm.apiExportModelConfigSettings)
+		apiGroup.POST("/config/import", pm.apiImportModelConfigSettings)
 		apiGroup.GET("/events", pm.apiSendEvents)
 		apiGroup.GET("/metrics", pm.apiGetMetrics)
 		apiGroup.DELETE("/metrics", pm.apiClearActivity)
@@ -194,6 +199,89 @@ func parsePositiveInt(value string) int {
 
 func (pm *ProxyManager) apiGetModels(c *gin.Context) {
 	c.JSON(http.StatusOK, pm.getModelStatus())
+}
+
+func (pm *ProxyManager) apiGetModelConfigs(c *gin.Context) {
+	configs, err := pm.listEditableModelConfigs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get model config settings"})
+		return
+	}
+	c.JSON(http.StatusOK, configs)
+}
+
+func (pm *ProxyManager) apiPutModelConfigSettings(c *gin.Context) {
+	if pm.sessionModelSettings == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session model settings are unavailable"})
+		return
+	}
+
+	modelID := c.Param("model")
+	var settings SessionModelSettings
+	if err := c.ShouldBindJSON(&settings); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model settings"})
+		return
+	}
+
+	modelConfig, err := pm.saveSessionModelSettings(modelID, settings)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, modelConfig)
+}
+
+func (pm *ProxyManager) apiDeleteModelConfigSettings(c *gin.Context) {
+	if pm.sessionModelSettings == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session model settings are unavailable"})
+		return
+	}
+
+	modelID := c.Param("model")
+	modelConfig, err := pm.resetSessionModelSettings(modelID)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, modelConfig)
+}
+
+func (pm *ProxyManager) apiExportModelConfigSettings(c *gin.Context) {
+	data, err := pm.exportSessionConfigYAML()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to export model config settings"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Header("Content-Disposition", `attachment; filename="llama-swap-session-config.yaml"`)
+	c.Data(http.StatusOK, "application/x-yaml; charset=utf-8", data)
+}
+
+func (pm *ProxyManager) apiImportModelConfigSettings(c *gin.Context) {
+	if pm.sessionModelSettings == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session model settings are unavailable"})
+		return
+	}
+
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read imported config"})
+		return
+	}
+	result, err := pm.importSessionConfigYAML(data)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 type messageType string

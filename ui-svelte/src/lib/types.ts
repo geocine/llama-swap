@@ -70,6 +70,29 @@ export interface ModelDownloadProgress {
   message: string;
 }
 
+export interface SessionModelSettings {
+  source: string;
+  serverArgs: string;
+  kvCacheArgs: string;
+  samplingArgs: string;
+}
+
+export interface EditableModelConfig {
+  modelId: string;
+  state: ModelStatus;
+  base: SessionModelSettings;
+  override?: SessionModelSettings;
+  effective: SessionModelSettings;
+  editable: boolean;
+  message?: string;
+  command: string;
+}
+
+export interface ConfigImportResult {
+  imported: string[];
+  skipped: string[];
+}
+
 export type ScreenWidth = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
 
 export type TextContentPart = {

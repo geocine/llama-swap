@@ -90,29 +90,11 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 		concurrentLimit = config.ConcurrencyLimit
 	}
 
-	// Setup the reverse proxy.
-	proxyURL, err := url.Parse(config.Proxy)
-	if err != nil {
-		proxyLogger.Errorf("<%s> invalid proxy URL %q: %v", ID, config.Proxy, err)
-	}
-
-	var reverseProxy *httputil.ReverseProxy
-	if proxyURL != nil {
-		reverseProxy = httputil.NewSingleHostReverseProxy(proxyURL)
-		reverseProxy.ModifyResponse = func(resp *http.Response) error {
-			// prevent nginx from buffering streaming responses (e.g., SSE)
-			if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-				resp.Header.Set("X-Accel-Buffering", "no")
-			}
-			return nil
-		}
-	}
-
 	return &Process{
 		ID:                      ID,
 		config:                  config,
 		cmd:                     nil,
-		reverseProxy:            reverseProxy,
+		reverseProxy:            newReverseProxy(ID, config.Proxy, proxyLogger),
 		cancelUpstream:          nil,
 		processLogger:           processLogger,
 		proxyLogger:             proxyLogger,
@@ -129,6 +111,48 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 		gracefulStopTimeout: 10 * time.Second,
 		cmdWaitChan:         make(chan struct{}),
 	}
+}
+
+func newReverseProxy(processID string, proxy string, proxyLogger *LogMonitor) *httputil.ReverseProxy {
+	proxyURL, err := url.Parse(proxy)
+	if err != nil {
+		proxyLogger.Errorf("<%s> invalid proxy URL %q: %v", processID, proxy, err)
+	}
+
+	if proxyURL == nil {
+		return nil
+	}
+
+	reverseProxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	reverseProxy.ModifyResponse = func(resp *http.Response) error {
+		// prevent nginx from buffering streaming responses (e.g., SSE)
+		if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			resp.Header.Set("X-Accel-Buffering", "no")
+		}
+		return nil
+	}
+	return reverseProxy
+}
+
+func (p *Process) UpdateConfigIfStopped(modelConfig config.ModelConfig) {
+	p.stateMutex.RLock()
+	stopped := p.state == StateStopped
+	p.stateMutex.RUnlock()
+	if !stopped {
+		return
+	}
+
+	p.cmdMutex.Lock()
+	defer p.cmdMutex.Unlock()
+
+	p.config = modelConfig
+	p.reverseProxy = newReverseProxy(p.ID, modelConfig.Proxy, p.proxyLogger)
+}
+
+func (p *Process) currentConfig() config.ModelConfig {
+	p.cmdMutex.RLock()
+	defer p.cmdMutex.RUnlock()
+	return p.config
 }
 
 // LogMonitor returns the log monitor associated with the process.
@@ -234,12 +258,13 @@ func (p *Process) forceState(newState ProcessState) {
 // it is a private method because starting is automatic but stopping can be called
 // at any time.
 func (p *Process) start() error {
+	modelConfig := p.currentConfig()
 
-	if p.config.Proxy == "" {
+	if modelConfig.Proxy == "" {
 		return fmt.Errorf("can not start(), upstream proxy missing")
 	}
 
-	args, err := p.config.SanitizedCommand()
+	args, err := modelConfig.SanitizedCommand()
 	if err != nil {
 		return fmt.Errorf("unable to get sanitized command: %v", err)
 	}
@@ -270,7 +295,7 @@ func (p *Process) start() error {
 	p.cmd = exec.CommandContext(cmdContext, args[0], args[1:]...)
 	p.cmd.Stdout = p.processLogger
 	p.cmd.Stderr = p.processLogger
-	p.cmd.Env = append(p.cmd.Environ(), p.config.Env...)
+	p.cmd.Env = append(p.cmd.Environ(), modelConfig.Env...)
 	p.cmd.Cancel = p.cmdStopUpstreamProcess
 	p.cmd.WaitDelay = p.gracefulStopTimeout
 	setProcAttributes(p.cmd)
@@ -282,7 +307,7 @@ func (p *Process) start() error {
 
 	p.failedStartCount++ // this will be reset to zero when the process has successfully started
 
-	p.proxyLogger.Debugf("<%s> Executing start command: %s, env: %s", p.ID, strings.Join(args, " "), strings.Join(p.config.Env, ", "))
+	p.proxyLogger.Debugf("<%s> Executing start command: %s, env: %s", p.ID, strings.Join(args, " "), strings.Join(modelConfig.Env, ", "))
 	err = p.cmd.Start()
 
 	// Set process state to failed
@@ -310,11 +335,11 @@ func (p *Process) start() error {
 
 	checkStartTime := time.Now()
 	maxDuration := time.Second * time.Duration(p.healthCheckTimeout)
-	checkEndpoint := strings.TrimSpace(p.config.CheckEndpoint)
+	checkEndpoint := strings.TrimSpace(modelConfig.CheckEndpoint)
 
 	// a "none" means don't check for health ... I could have picked a better word :facepalm:
 	if checkEndpoint != "none" {
-		proxyTo := p.config.Proxy
+		proxyTo := modelConfig.Proxy
 		healthURL, err := url.JoinPath(proxyTo, checkEndpoint)
 		if err != nil {
 			return fmt.Errorf("failed to create health check URL proxy=%s and checkEndpoint=%s", proxyTo, checkEndpoint)
@@ -350,11 +375,12 @@ func (p *Process) start() error {
 		}
 	}
 
-	if p.config.UnloadAfter > 0 {
+	if modelConfig.UnloadAfter > 0 {
 		// start a goroutine to check every second if
 		// the process should be stopped
+		unloadAfter := modelConfig.UnloadAfter
 		go func() {
-			maxDuration := time.Duration(p.config.UnloadAfter) * time.Second
+			maxDuration := time.Duration(unloadAfter) * time.Second
 
 			for range time.Tick(time.Second) {
 				if p.CurrentState() != StateReady {
@@ -367,7 +393,7 @@ func (p *Process) start() error {
 				}
 
 				if time.Since(p.getLastRequestHandled()) > maxDuration {
-					p.proxyLogger.Infof("<%s> Unloading model, TTL of %ds reached", p.ID, p.config.UnloadAfter)
+					p.proxyLogger.Infof("<%s> Unloading model, TTL of %ds reached", p.ID, unloadAfter)
 					p.Stop()
 					return
 				}
@@ -567,7 +593,8 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 		// PR #417 (no support for anthropic v1/messages yet)
 		isChatCompletions := strings.HasPrefix(r.URL.Path, "/v1/chat/completions")
-		if p.config.SendLoadingState != nil && *p.config.SendLoadingState && isStreaming && isChatCompletions {
+		modelConfig := p.currentConfig()
+		if modelConfig.SendLoadingState != nil && *modelConfig.SendLoadingState && isStreaming && isChatCompletions {
 			srw = newStatusResponseWriter(p, w)
 			go srw.statusUpdates(swapCtx)
 		} else {
@@ -673,9 +700,10 @@ func (p *Process) cmdStopUpstreamProcess() error {
 		return fmt.Errorf("<%s> process is nil or cmd is nil, skipping graceful stop", p.ID)
 	}
 
-	if p.config.CmdStop != "" {
+	modelConfig := p.currentConfig()
+	if modelConfig.CmdStop != "" {
 		// replace ${PID} with the pid of the process
-		stopArgs, err := config.SanitizeCommand(strings.ReplaceAll(p.config.CmdStop, "${PID}", fmt.Sprintf("%d", p.cmd.Process.Pid)))
+		stopArgs, err := config.SanitizeCommand(strings.ReplaceAll(modelConfig.CmdStop, "${PID}", fmt.Sprintf("%d", p.cmd.Process.Pid)))
 		if err != nil {
 			p.proxyLogger.Errorf("<%s> Failed to sanitize stop command: %v", p.ID, err)
 			return err

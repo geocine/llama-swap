@@ -72,7 +72,8 @@ type ProxyManager struct {
 	upstreamLogger *LogMonitor
 	muxLogger      *LogMonitor
 
-	metricsMonitor *metricsMonitor
+	metricsMonitor       *metricsMonitor
+	sessionModelSettings *sessionModelSettingsStore
 
 	processGroups map[string]*ProcessGroup
 
@@ -182,6 +183,11 @@ func New(proxyConfig config.Config) *ProxyManager {
 		peerProxy = nil
 	}
 
+	sessionModelSettings, err := newSessionModelSettingsStore(proxyConfig.CaptureDBPath)
+	if err != nil {
+		proxyLogger.Warnf("failed to initialize session model settings sqlite database %q: %v; model config editing disabled", proxyConfig.CaptureDBPath, err)
+	}
+
 	pm := &ProxyManager{
 		config:    proxyConfig,
 		ginEngine: gin.New(),
@@ -190,7 +196,8 @@ func New(proxyConfig config.Config) *ProxyManager {
 		muxLogger:      muxLogger,
 		upstreamLogger: upstreamLogger,
 
-		metricsMonitor: newMetricsMonitor(proxyLogger, maxMetrics, proxyConfig.CaptureBuffer, proxyConfig.CaptureDBPath, captureKey),
+		metricsMonitor:       newMetricsMonitor(proxyLogger, maxMetrics, proxyConfig.CaptureBuffer, proxyConfig.CaptureDBPath, captureKey),
+		sessionModelSettings: sessionModelSettings,
 
 		processGroups: make(map[string]*ProcessGroup),
 
@@ -208,7 +215,7 @@ func New(proxyConfig config.Config) *ProxyManager {
 
 	// create the process groups
 	for groupID := range proxyConfig.Groups {
-		processGroup := NewProcessGroup(groupID, proxyConfig, proxyLogger, upstreamLogger)
+		processGroup := NewProcessGroup(groupID, proxyConfig, proxyLogger, upstreamLogger, pm.effectiveModelConfig)
 		pm.processGroups[groupID] = processGroup
 	}
 
@@ -484,6 +491,11 @@ func (pm *ProxyManager) Shutdown() {
 	if pm.metricsMonitor != nil {
 		if err := pm.metricsMonitor.close(); err != nil {
 			pm.proxyLogger.Warnf("error closing capture sqlite database: %v", err)
+		}
+	}
+	if pm.sessionModelSettings != nil {
+		if err := pm.sessionModelSettings.close(); err != nil {
+			pm.proxyLogger.Warnf("error closing session model settings sqlite database: %v", err)
 		}
 	}
 	pm.shutdownCancel()
@@ -1016,14 +1028,15 @@ func (pm *ProxyManager) listRunningProcessesHandler(context *gin.Context) {
 	for _, processGroup := range pm.processGroups {
 		for _, process := range processGroup.processes {
 			if process.CurrentState() == StateReady {
+				modelConfig := process.currentConfig()
 				runningProcesses = append(runningProcesses, gin.H{
 					"model":       process.ID,
 					"state":       process.state,
-					"cmd":         process.config.Cmd,
-					"proxy":       process.config.Proxy,
-					"ttl":         process.config.UnloadAfter,
-					"name":        process.config.Name,
-					"description": process.config.Description,
+					"cmd":         modelConfig.Cmd,
+					"proxy":       modelConfig.Proxy,
+					"ttl":         modelConfig.UnloadAfter,
+					"name":        modelConfig.Name,
+					"description": modelConfig.Description,
 				})
 			}
 		}

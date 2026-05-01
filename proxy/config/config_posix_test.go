@@ -246,6 +246,9 @@ groups:
 		},
 	}
 
+	// rawSource is an internal cache populated by LoadConfigFromReader; it is
+	// not part of the semantic config exposed to consumers.
+	config.rawSource = nil
 	assert.Equal(t, expected, config)
 
 	realname, found := config.RealModelName("m1")

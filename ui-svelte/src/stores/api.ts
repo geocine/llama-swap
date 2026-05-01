@@ -9,6 +9,9 @@ import type {
   ReqRespCapture,
   InFlightStats,
   ModelDownloadProgress,
+  EditableModelConfig,
+  SessionModelSettings,
+  ConfigImportResult,
 } from "../lib/types";
 import { handleUnauthorized } from "./auth";
 import { connectionState } from "./theme";
@@ -331,4 +334,68 @@ export async function clearActivity(): Promise<void> {
     console.error("Failed to clear activity:", error);
     throw error;
   }
+}
+
+export async function listModelConfigSettings(): Promise<EditableModelConfig[]> {
+  const response = await apiFetch("/api/config/models");
+  if (!response.ok) {
+    throw new Error(`Failed to fetch model config settings: ${response.status}`);
+  }
+  return (await response.json()) as EditableModelConfig[];
+}
+
+export async function saveModelConfigSettings(
+  modelId: string,
+  settings: SessionModelSettings
+): Promise<EditableModelConfig> {
+  const response = await apiFetch(`/api/config/models/${encodeURIComponent(modelId)}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to save model config settings: ${response.status} ${message}`);
+  }
+  return (await response.json()) as EditableModelConfig;
+}
+
+export async function resetModelConfigSettings(modelId: string): Promise<EditableModelConfig> {
+  const response = await apiFetch(`/api/config/models/${encodeURIComponent(modelId)}/settings`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to reset model config settings: ${response.status} ${message}`);
+  }
+  return (await response.json()) as EditableModelConfig;
+}
+
+export async function downloadModelConfigSettings(): Promise<void> {
+  const response = await apiFetch("/api/config/export");
+  if (!response.ok) {
+    throw new Error(`Failed to export model config settings: ${response.status}`);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "llama-swap-session-config.yaml";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function importModelConfigSettings(file: File): Promise<ConfigImportResult> {
+  const response = await apiFetch("/api/config/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-yaml" },
+    body: await file.text(),
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to import model config settings: ${response.status} ${message}`);
+  }
+  return (await response.json()) as ConfigImportResult;
 }

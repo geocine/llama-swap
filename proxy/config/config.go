@@ -59,6 +59,21 @@ func (ml *MacroList) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// MarshalYAML emits macros as a YAML mapping so exported configs can be
+// imported by the same ordered MacroList unmarshaler.
+func (ml MacroList) MarshalYAML() (any, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	for _, entry := range ml {
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: entry.Name}
+		valueNode := &yaml.Node{}
+		if err := valueNode.Encode(entry.Value); err != nil {
+			return nil, err
+		}
+		node.Content = append(node.Content, keyNode, valueNode)
+	}
+	return node, nil
+}
+
 // Get retrieves a macro value by name
 func (ml MacroList) Get(name string) (any, bool) {
 	for _, entry := range ml {
@@ -154,6 +169,25 @@ type Config struct {
 
 	// support remote peers, see issue #433, #296
 	Peers PeerDictionaryConfig `yaml:"peers"`
+
+	// rawSource holds the original YAML bytes loaded by LoadConfigFromReader,
+	// before any env macro substitution. The exporter uses these bytes to
+	// preserve the document's macros, comments and key ordering when emitting
+	// a session config YAML. This field is intentionally unexported so it is
+	// never serialized back into a YAML document.
+	rawSource []byte
+}
+
+// RawSource returns a copy of the original YAML bytes that produced this
+// Config (before env macro substitution). Returns nil when the Config was
+// not built from a YAML document (e.g. constructed in tests).
+func (c *Config) RawSource() []byte {
+	if c == nil || len(c.rawSource) == 0 {
+		return nil
+	}
+	out := make([]byte, len(c.rawSource))
+	copy(out, c.rawSource)
+	return out
 }
 
 func defaultCaptureDBPath() string {
@@ -222,6 +256,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	if err = yaml.Unmarshal([]byte(yamlStr), &config); err != nil {
 		return Config{}, err
 	}
+
+	// Capture the original (pre-substitution) bytes so the exporter can later
+	// reproduce the document with macros and comments intact.
+	config.rawSource = append([]byte(nil), data...)
 
 	if config.HealthCheckTimeout < 15 {
 		config.HealthCheckTimeout = 15

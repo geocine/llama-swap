@@ -3,10 +3,25 @@
   import { isNarrow } from "../stores/theme";
   import { persistentStore } from "../stores/persistent";
   import type { Model } from "../lib/types";
-  import { LoaderCircle } from "lucide-svelte";
+  import ModelConfigDialog from "./ModelConfigDialog.svelte";
+  import ConfigImportExport from "./config/ConfigImportExport.svelte";
+  import { LoaderCircle, Settings } from "lucide-svelte";
 
   let isUnloading = $state(false);
   let menuOpen = $state(false);
+  let configModelId = $state("");
+  let configOpen = $state(false);
+  let configStatus = $state<{ message: string; kind: "info" | "error" } | null>(null);
+  let configStatusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function setConfigStatus(message: string, kind: "info" | "error") {
+    if (configStatusTimer) clearTimeout(configStatusTimer);
+    configStatus = { message, kind };
+    configStatusTimer = setTimeout(() => {
+      configStatus = null;
+      configStatusTimer = null;
+    }, 5000);
+  }
 
   const showUnlistedStore = persistentStore<boolean>("showUnlisted", true);
   const showIdorNameStore = persistentStore<"id" | "name">("showIdorName", "id");
@@ -78,6 +93,11 @@
   function showDownloadProgress(model: Model): boolean {
     return model.state === "starting" && activeDownloadProgress !== null;
   }
+
+  function openConfig(modelId: string): void {
+    configModelId = modelId;
+    configOpen = true;
+  }
 </script>
 
 <div class="card h-full flex flex-col">
@@ -129,6 +149,12 @@
                 </svg>
                 {isUnloading ? "Unloading..." : "Unload All"}
               </button>
+              <div class="flex items-center justify-around gap-1 border-t border-border px-2 py-2">
+                <ConfigImportExport
+                  buttonClass="btn flex-1 flex items-center justify-center gap-2 py-1.5"
+                  onstatus={setConfigStatus}
+                />
+              </div>
             </div>
           {/if}
         </div>
@@ -160,22 +186,38 @@
             unlisted
           </button>
         </div>
-        <button class="btn flex items-center gap-2" onclick={handleUnloadAllModels} disabled={isUnloading}>
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
-            <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25Zm.53 5.47a.75.75 0 0 0-1.06 0l-3 3a.75.75 0 1 0 1.06 1.06l1.72-1.72v5.69a.75.75 0 0 0 1.5 0v-5.69l1.72 1.72a.75.75 0 1 0 1.06-1.06l-3-3Z" clip-rule="evenodd" />
-          </svg>
-          {isUnloading ? "Unloading..." : "Unload All"}
-        </button>
+        <div class="flex items-center gap-2">
+          <ConfigImportExport
+            buttonClass="btn p-2"
+            onstatus={setConfigStatus}
+          />
+          <button class="btn flex items-center gap-2" onclick={handleUnloadAllModels} disabled={isUnloading}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
+              <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25Zm.53 5.47a.75.75 0 0 0-1.06 0l-3 3a.75.75 0 1 0 1.06 1.06l1.72-1.72v5.69a.75.75 0 0 0 1.5 0v-5.69l1.72 1.72a.75.75 0 1 0 1.06-1.06l-3-3Z" clip-rule="evenodd" />
+            </svg>
+            {isUnloading ? "Unloading..." : "Unload All"}
+          </button>
+        </div>
       </div>
     {/if}
   </div>
+
+  {#if configStatus}
+    <div
+      class="mt-2 shrink-0 rounded-sm border px-3 py-2 text-xs {configStatus.kind === 'error'
+        ? 'border-error/40 bg-error/10 text-error'
+        : 'border-border bg-surface text-txtsecondary'}"
+    >
+      {configStatus.message}
+    </div>
+  {/if}
 
   <div class="flex-1 overflow-y-auto">
     <table class="w-full table-fixed">
       <thead class="sticky top-0 z-10">
         <tr class="border-b border-border bg-surface">
           <th class="text-left">{$showIdorNameStore === "id" ? "Model ID" : "Name"}</th>
-          <th class="w-44 text-right pr-2">State</th>
+          <th class="w-56 text-right pr-2">State</th>
         </tr>
       </thead>
       <tbody>
@@ -217,9 +259,17 @@
                 </div>
               {/if}
             </td>
-            <td class="w-44">
+            <td class="w-56">
               <!-- Action + state are twin chips: identical height, text size, and gap on every row -->
               <div class="flex items-center justify-end gap-2">
+                <button
+                  class="status w-8 border-border text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white cursor-pointer"
+                  onclick={() => openConfig(model.id)}
+                  title="Configure model"
+                  aria-label={`Configure ${model.id}`}
+                >
+                  <Settings class="h-3.5 w-3.5" />
+                </button>
                 {#if model.state === "starting"}
                   <button
                     class="status w-16 border-warning/40 text-warning transition-colors duration-150 hover:border-warning hover:text-warning cursor-pointer"
@@ -284,6 +334,12 @@
     {/if}
   </div>
 </div>
+
+<ModelConfigDialog
+  open={configOpen}
+  modelId={configModelId}
+  onClose={() => (configOpen = false)}
+/>
 
 <style>
   .loading-progress {
