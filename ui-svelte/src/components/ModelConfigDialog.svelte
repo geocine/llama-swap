@@ -22,6 +22,7 @@
     serverArgs: "",
     kvCacheArgs: "",
     samplingArgs: "",
+    grammarArgs: "",
   });
   let loading = $state(false);
   let saving = $state(false);
@@ -134,6 +135,17 @@
             <label class="field">
               <span>Sampling args</span>
               <textarea bind:value={settings.samplingArgs} class="textarea" rows="3" spellcheck="false"></textarea>
+            </label>
+
+            <label class="field">
+              <span>Grammar args</span>
+              <textarea
+                bind:value={settings.grammarArgs}
+                class="textarea"
+                rows="2"
+                spellcheck="false"
+                placeholder="e.g. --grammar-file /app/think.gbnf"
+              ></textarea>
             </label>
 
             <div class="rounded-sm border border-border bg-black/40 px-3 py-2">

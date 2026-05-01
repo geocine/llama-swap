@@ -20,6 +20,11 @@ type SessionModelSettings struct {
 	ServerArgs   string `json:"serverArgs" yaml:"serverArgs"`
 	KVCacheArgs  string `json:"kvCacheArgs" yaml:"kvCacheArgs"`
 	SamplingArgs string `json:"samplingArgs" yaml:"samplingArgs"`
+	// GrammarArgs holds llama.cpp grammar-related flags such as
+	// --grammar-file, --grammar, --json-schema, and --json-schema-file.
+	// Kept in its own bucket so the UI can edit grammar configuration
+	// without colliding with normal sampling arguments.
+	GrammarArgs string `json:"grammarArgs" yaml:"grammarArgs"`
 }
 
 type EditableModelConfig struct {
@@ -80,9 +85,19 @@ func newSessionModelSettingsStore(dbPath string) (*sessionModelSettingsStore, er
 			server_args TEXT NOT NULL,
 			kv_cache_args TEXT NOT NULL,
 			sampling_args TEXT NOT NULL,
+			grammar_args TEXT NOT NULL DEFAULT '',
 			updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 		)
 	`); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	// Migrate older databases that pre-date the grammar_args column. SQLite
+	// has no native "ADD COLUMN IF NOT EXISTS"; we rely on the duplicate-column
+	// error to short-circuit on already-migrated databases.
+	if _, err := db.Exec(`ALTER TABLE session_model_settings ADD COLUMN grammar_args TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
 		db.Close()
 		return nil, err
 	}
@@ -106,10 +121,10 @@ func (s *sessionModelSettingsStore) get(modelID string) (SessionModelSettings, b
 
 	var settings SessionModelSettings
 	err := s.db.QueryRow(`
-		SELECT source, server_args, kv_cache_args, sampling_args
+		SELECT source, server_args, kv_cache_args, sampling_args, grammar_args
 		FROM session_model_settings
 		WHERE model_id = ?
-	`, modelID).Scan(&settings.Source, &settings.ServerArgs, &settings.KVCacheArgs, &settings.SamplingArgs)
+	`, modelID).Scan(&settings.Source, &settings.ServerArgs, &settings.KVCacheArgs, &settings.SamplingArgs, &settings.GrammarArgs)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionModelSettings{}, false, nil
 	}
@@ -128,15 +143,16 @@ func (s *sessionModelSettingsStore) save(modelID string, settings SessionModelSe
 
 	_, err := s.db.Exec(`
 		INSERT INTO session_model_settings
-			(model_id, source, server_args, kv_cache_args, sampling_args, updated_at)
-		VALUES (?, ?, ?, ?, ?, unixepoch())
+			(model_id, source, server_args, kv_cache_args, sampling_args, grammar_args, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, unixepoch())
 		ON CONFLICT(model_id) DO UPDATE SET
 			source = excluded.source,
 			server_args = excluded.server_args,
 			kv_cache_args = excluded.kv_cache_args,
 			sampling_args = excluded.sampling_args,
+			grammar_args = excluded.grammar_args,
 			updated_at = unixepoch()
-	`, modelID, settings.Source, settings.ServerArgs, settings.KVCacheArgs, settings.SamplingArgs)
+	`, modelID, settings.Source, settings.ServerArgs, settings.KVCacheArgs, settings.SamplingArgs, settings.GrammarArgs)
 	return err
 }
 
@@ -340,6 +356,7 @@ func normalizeSessionModelSettings(settings SessionModelSettings) SessionModelSe
 		ServerArgs:   strings.TrimSpace(settings.ServerArgs),
 		KVCacheArgs:  strings.TrimSpace(settings.KVCacheArgs),
 		SamplingArgs: strings.TrimSpace(settings.SamplingArgs),
+		GrammarArgs:  strings.TrimSpace(settings.GrammarArgs),
 	}
 }
 
@@ -357,6 +374,7 @@ func extractSessionModelSettings(modelConfig config.ModelConfig) (SessionModelSe
 	serverArgs := []string{}
 	kvArgs := []string{}
 	samplingArgs := []string{}
+	grammarArgs := []string{}
 
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
@@ -398,10 +416,13 @@ func extractSessionModelSettings(modelConfig config.ModelConfig) (SessionModelSe
 		}
 
 		target := &serverArgs
-		if isKVCacheFlag(flag) {
+		switch {
+		case isKVCacheFlag(flag):
 			target = &kvArgs
-		} else if isSamplingFlag(flag) {
+		case isSamplingFlag(flag):
 			target = &samplingArgs
+		case isGrammarFlag(flag):
+			target = &grammarArgs
 		}
 		*target = append(*target, arg)
 		if !hasEqual && flagTakesValue(arg) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
@@ -417,6 +438,7 @@ func extractSessionModelSettings(modelConfig config.ModelConfig) (SessionModelSe
 	settings.ServerArgs = strings.Join(serverArgs, " ")
 	settings.KVCacheArgs = strings.Join(kvArgs, " ")
 	settings.SamplingArgs = strings.Join(samplingArgs, " ")
+	settings.GrammarArgs = strings.Join(grammarArgs, " ")
 	return normalizeSessionModelSettings(settings), meta, nil
 }
 
@@ -456,6 +478,7 @@ func buildSessionModelCommand(meta sessionCommandMeta, settings SessionModelSett
 	args = append(args, splitCommandSegment(settings.ServerArgs)...)
 	args = append(args, splitCommandSegment(settings.KVCacheArgs)...)
 	args = append(args, splitCommandSegment(settings.SamplingArgs)...)
+	args = append(args, splitCommandSegment(settings.GrammarArgs)...)
 	return joinCommandArgs(args)
 }
 
@@ -502,6 +525,15 @@ func isKVCacheFlag(flag string) bool {
 func isSamplingFlag(flag string) bool {
 	switch flag {
 	case "--top-k", "--top-p", "--min-p", "--temp", "--repeat-penalty", "--repeat_penalty", "--presence-penalty", "--presence_penalty":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGrammarFlag(flag string) bool {
+	switch flag {
+	case "--grammar", "--grammar-file", "-j", "--json-schema", "--json-schema-file":
 		return true
 	default:
 		return false

@@ -75,6 +75,7 @@ export interface SessionModelSettings {
   serverArgs: string;
   kvCacheArgs: string;
   samplingArgs: string;
+  grammarArgs: string;
 }
 
 export interface EditableModelConfig {
