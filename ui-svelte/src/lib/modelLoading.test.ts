@@ -35,6 +35,28 @@ describe("model loading helpers", () => {
       state: "starting",
       label: "Loading model",
       elapsedMs: 3500,
+      downloadProgress: null,
+    });
+  });
+
+  it("uses download progress as the loading label when active", () => {
+    expect(
+      getChatModelLoadingState(models, "qwen", true, false, 1000, 4500, {
+        active: true,
+        filename: "model.gguf.downloadInProgress",
+        downloadedBytes: "1.00 GB",
+        totalBytes: "2.00 GB",
+        percent: 50,
+        message: "Downloading model weights",
+      })
+    ).toMatchObject({
+      modelId: "qwen35-27b",
+      state: "starting",
+      label: "Downloading model weights",
+      downloadProgress: {
+        active: true,
+        percent: 50,
+      },
     });
   });
 

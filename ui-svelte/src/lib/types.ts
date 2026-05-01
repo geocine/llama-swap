@@ -56,6 +56,15 @@ export interface VersionInfo {
   version: string;
 }
 
+export interface ModelDownloadProgress {
+  active: boolean;
+  filename?: string;
+  downloadedBytes?: string;
+  totalBytes?: string;
+  percent?: number;
+  message: string;
+}
+
 export type ScreenWidth = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
 
 export type TextContentPart = {

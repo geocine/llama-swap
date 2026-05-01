@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { models, unloadSingleModel } from "../../stores/api";
+  import { downloadProgress, models, unloadSingleModel } from "../../stores/api";
   import { persistentStore } from "../../stores/persistent";
   import { completeChatCompletion, streamChatCompletion } from "../../lib/chatApi";
   import {
@@ -26,14 +26,10 @@
   import ModelSelector from "./ModelSelector.svelte";
   import {
     Archive,
-    BarChart3,
-    ImageIcon,
     PanelLeftOpen,
     Plus,
     Send,
     Settings,
-    Square,
-    Target,
     X,
   } from "lucide-svelte";
   import { get } from "svelte/store";
@@ -119,7 +115,15 @@
   let userScrolledUp = $state(false);
   let isEmpty = $derived(messages.length === 0);
   let modelLoadingState = $derived(
-    getChatModelLoadingState($models, $selectedModelStore, isStreaming, hasReceivedOutput, requestStartedAt, now)
+    getChatModelLoadingState(
+      $models,
+      $selectedModelStore,
+      isStreaming,
+      hasReceivedOutput,
+      requestStartedAt,
+      now,
+      $downloadProgress
+    )
   );
   let selectedModelInfo = $derived(resolveSelectedModel($models, $selectedModelStore));
   let contextTotal = $derived(selectedModelInfo?.contextSize ?? 0);
@@ -771,7 +775,7 @@
 
 {#snippet composer()}
   <div
-    class="composer overflow-hidden rounded-sm border border-border bg-surface shadow-2xl shadow-black/40 transition-colors duration-150 focus-within:border-border-hover"
+    class="composer overflow-hidden rounded-[2px] border border-border bg-surface shadow-2xl shadow-black/40 transition-colors duration-150 focus-within:border-border-hover"
   >
     <!-- Image attachment cards -->
     {#if attachedImages.length > 0}
@@ -779,7 +783,7 @@
         <div class="flex gap-2.5">
           {#each attachedImages as image, idx (idx)}
             <div
-              class="group relative flex w-44 shrink-0 flex-col overflow-hidden rounded-sm border border-border bg-zinc-950 transition-colors duration-150 hover:border-border-hover"
+              class="group relative flex w-44 shrink-0 flex-col overflow-hidden rounded-[2px] border border-border bg-zinc-950 transition-colors duration-150 hover:border-border-hover"
             >
               <div class="relative h-20 w-full overflow-hidden bg-black">
                 <img
@@ -788,7 +792,7 @@
                   class="h-full w-full object-cover"
                 />
                 <button
-                  class="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-sm bg-black/70 text-white/85 ring-1 ring-white/15 backdrop-blur-sm transition-colors hover:bg-black/90 hover:text-white"
+                  class="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-[2px] bg-black/70 text-white/85 ring-1 ring-white/15 backdrop-blur-sm transition-colors hover:bg-black/90 hover:text-white"
                   onclick={() => removeImage(idx)}
                   title="Remove image"
                   aria-label="Remove image"
@@ -812,12 +816,12 @@
 
     <!-- Error message -->
     {#if imageError}
-      <div class="mx-3 mt-3 rounded-sm border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
+      <div class="mx-3 mt-3 rounded-[2px] border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
         {imageError}
       </div>
     {/if}
     {#if compactError}
-      <div class="mx-3 mt-3 rounded-sm border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
+      <div class="mx-3 mt-3 rounded-[2px] border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
         {compactError}
       </div>
     {/if}
@@ -845,7 +849,7 @@
         class="min-h-12 flex-1 resize-none border-0 bg-transparent px-1 py-2 text-sm leading-6 text-txtmain placeholder-zinc-700 outline-none disabled:opacity-50"
       ></textarea>
       <button
-        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-border bg-black text-txtsecondary transition-all duration-150 hover:border-border-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[2px] border border-border bg-black text-txtsecondary transition-all duration-150 hover:border-border-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         onclick={sendMessage}
         disabled={!$chatsReady || isStreaming || isCompacting || (!userInput.trim() && attachedImages.length === 0) || !$selectedModelStore}
         title="Send message"
@@ -858,12 +862,12 @@
     <!-- Footer: hints | live stats | actions -->
     <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border bg-black/40 px-3 py-2">
       <div class="hidden items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-txtmuted sm:flex">
-        <kbd class="rounded-sm border border-border bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-txtsecondary">
+        <kbd class="rounded-[2px] border border-border bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-txtsecondary">
           Enter
         </kbd>
         <span>to send</span>
         <span class="text-txtmuted/70">·</span>
-        <kbd class="rounded-sm border border-border bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-txtsecondary">
+        <kbd class="rounded-[2px] border border-border bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-txtsecondary">
           Shift+Enter
         </kbd>
         <span>for newline</span>
@@ -875,7 +879,6 @@
             class="flex items-center gap-1.5"
             title={`${contextUsed.toLocaleString()} of ${contextTotal.toLocaleString()} (${contextPercent}%)`}
           >
-            <Target class="h-3 w-3 text-txtmuted" />
             <span>Context:</span>
             <span class="text-txtmain">{contextUsed.toLocaleString()}</span>
             <span class="text-txtmuted">/ {contextTotal.toLocaleString()}</span>
@@ -884,7 +887,6 @@
         {/if}
         {#if outputUsed > 0 || liveTokensPerSecond > 0}
           <span class="flex items-center gap-1.5">
-            <BarChart3 class="h-3 w-3 text-txtmuted" />
             <span>Output:</span>
             <span class="text-txtmain">{outputUsed.toLocaleString()}</span>
             <span class="text-txtmuted">/ &infin;</span>
@@ -896,7 +898,6 @@
           </span>
         {:else if contextTotal > 0 && contextAvailable > 0}
           <span class="hidden items-center gap-1.5 md:flex" title={`${contextAvailable.toLocaleString()} tokens left`}>
-            <BarChart3 class="h-3 w-3 text-txtmuted" />
             <span>Free:</span>
             <span class="text-txtmain">{formatTokenCount(contextAvailable)}</span>
           </span>
@@ -905,30 +906,27 @@
 
       <div class="ml-auto flex items-center gap-2">
         <button
-          class="flex items-center gap-1.5 rounded-sm border border-border bg-zinc-950 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          class="rounded-[2px] border border-border bg-zinc-950 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
           onclick={() => fileInput?.click()}
           disabled={isStreaming || isCompacting || !$selectedModelStore}
           title="Attach image"
           aria-label="Attach image"
         >
-          <ImageIcon class="h-3.5 w-3.5" />
-          <span class="hidden sm:inline">Attach image</span>
+          Attach image
         </button>
 
         {#if isStreaming}
           <button
-            class="flex items-center gap-1.5 rounded-sm border border-red-600 bg-red-600 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-white transition-colors hover:border-red-500 hover:bg-red-500"
+            class="rounded-[2px] border border-red-600 bg-red-600 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-white transition-colors hover:border-red-500 hover:bg-red-500"
             onclick={cancelStreaming}
           >
-            <Square class="h-3 w-3" fill="currentColor" />
             Stop
           </button>
         {:else if isCompacting}
           <button
-            class="flex items-center gap-1.5 rounded-sm border border-border bg-zinc-950 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-txtsecondary"
+            class="rounded-[2px] border border-border bg-zinc-950 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-txtsecondary"
             disabled
           >
-            <Archive class="h-3 w-3" />
             Compacting
           </button>
         {/if}

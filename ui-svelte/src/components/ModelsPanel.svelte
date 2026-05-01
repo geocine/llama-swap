@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { models, loadModel, unloadAllModels, unloadSingleModel } from "../stores/api";
+  import { models, downloadProgress, loadModel, unloadAllModels, unloadSingleModel } from "../stores/api";
   import { isNarrow } from "../stores/theme";
   import { persistentStore } from "../stores/persistent";
   import type { Model } from "../lib/types";
@@ -37,6 +37,12 @@
   let transitioningModel = $derived(
     $models.find((m) => m.state === "starting" || m.state === "stopping") ?? null
   );
+  let activeDownloadProgress = $derived($downloadProgress?.active ? $downloadProgress : null);
+  let activeDownloadPercent = $derived(
+    typeof activeDownloadProgress?.percent === "number"
+      ? Math.min(100, Math.max(0, activeDownloadProgress.percent))
+      : null
+  );
 
   async function handleUnloadAllModels(): Promise<void> {
     isUnloading = true;
@@ -67,6 +73,10 @@
 
   function unloadLabel(model: Model): string {
     return model.state === "starting" ? "Stop" : "Unload";
+  }
+
+  function showDownloadProgress(model: Model): boolean {
+    return model.state === "starting" && activeDownloadProgress !== null;
   }
 </script>
 
@@ -182,6 +192,31 @@
               {#if model.aliases && model.aliases.length > 0}
                 <p class="text-xs text-txtsecondary font-mono">Aliases: {model.aliases.join(", ")}</p>
               {/if}
+              {#if showDownloadProgress(model)}
+                <div class="mt-2 max-w-xl rounded-sm border border-border bg-black/40 px-2.5 py-2">
+                  <div class="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] uppercase tracking-wider">
+                    <span class="font-bold text-txtmain">{activeDownloadProgress?.message}</span>
+                    <span class="text-txtsecondary">
+                      {activeDownloadProgress?.downloadedBytes ?? "0 B"}{#if activeDownloadProgress?.totalBytes} / {activeDownloadProgress.totalBytes}{/if}
+                    </span>
+                    {#if activeDownloadPercent !== null}
+                      <span class="text-txtmain">{activeDownloadPercent.toFixed(1)}%</span>
+                    {/if}
+                  </div>
+                  <div class="h-1 overflow-hidden rounded-full bg-zinc-800">
+                    {#if activeDownloadPercent !== null}
+                      <div class="h-full bg-white transition-[width] duration-300" style={`width: ${activeDownloadPercent}%`}></div>
+                    {:else}
+                      <div class="loading-progress h-full w-1/2 bg-white"></div>
+                    {/if}
+                  </div>
+                  {#if activeDownloadProgress?.filename}
+                    <div class="mt-1 truncate font-mono text-[10px] text-txtmuted" title={activeDownloadProgress.filename}>
+                      {activeDownloadProgress.filename}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </td>
             <td class="w-44">
               <!-- Action + state are twin chips: identical height, text size, and gap on every row -->
@@ -250,3 +285,18 @@
     {/if}
   </div>
 </div>
+
+<style>
+  .loading-progress {
+    animation: loading-progress 1.4s ease-in-out infinite;
+  }
+
+  @keyframes loading-progress {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(200%);
+    }
+  }
+</style>

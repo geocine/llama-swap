@@ -1,5 +1,14 @@
 import { writable } from "svelte/store";
-import type { Model, Metrics, VersionInfo, LogData, APIEventEnvelope, ReqRespCapture, InFlightStats } from "../lib/types";
+import type {
+  Model,
+  Metrics,
+  VersionInfo,
+  LogData,
+  APIEventEnvelope,
+  ReqRespCapture,
+  InFlightStats,
+  ModelDownloadProgress,
+} from "../lib/types";
 import { handleUnauthorized } from "./auth";
 import { connectionState } from "./theme";
 
@@ -11,6 +20,7 @@ export const proxyLogs = writable<string>("");
 export const upstreamLogs = writable<string>("");
 export const metrics = writable<Metrics[]>([]);
 export const inFlightRequests = writable<number>(0);
+export const downloadProgress = writable<ModelDownloadProgress | null>(null);
 export const versionInfo = writable<VersionInfo>({
   build_date: "unknown",
   commit: "unknown",
@@ -34,12 +44,71 @@ function appendLog(newData: string, store: typeof proxyLogs | typeof upstreamLog
   });
 }
 
+function parseDownloadProgressLine(line: string): ModelDownloadProgress | null {
+  const modelTotal = line.match(
+    /^llama-server-progress: model download (.+) \(([^/]+) \/ ([^,]+), ([\d.]+)%\)$/
+  );
+  if (modelTotal) {
+    return {
+      active: true,
+      filename: modelTotal[1],
+      downloadedBytes: modelTotal[2].trim(),
+      totalBytes: modelTotal[3].trim(),
+      percent: Number(modelTotal[4]),
+      message: "Downloading model weights",
+    };
+  }
+
+  const withTotal = line.match(
+    /^llama-server-progress: downloading (.+) \(([^/]+) \/ ([^,]+), ([\d.]+)%\)$/
+  );
+  if (withTotal) {
+    return {
+      active: true,
+      filename: withTotal[1],
+      downloadedBytes: withTotal[2].trim(),
+      totalBytes: withTotal[3].trim(),
+      percent: Number(withTotal[4]),
+      message: "Downloading model file",
+    };
+  }
+
+  const withoutTotal = line.match(/^llama-server-progress: downloading (.+) \(([^)]+)\)$/);
+  if (withoutTotal) {
+    return {
+      active: true,
+      filename: withoutTotal[1],
+      downloadedBytes: withoutTotal[2].trim(),
+      message: "Downloading model file",
+    };
+  }
+
+  if (line.includes("llama-server-progress: download finished")) {
+    return {
+      active: false,
+      message: "Download complete, initializing model",
+    };
+  }
+
+  return null;
+}
+
+function updateDownloadProgress(logData: string): void {
+  for (const line of logData.split(/\r?\n/)) {
+    const progress = parseDownloadProgressLine(line.trim());
+    if (progress) {
+      downloadProgress.set(progress);
+    }
+  }
+}
+
 export function enableAPIEvents(enabled: boolean): void {
   if (!enabled) {
     apiEventSource?.close();
     apiEventSource = null;
     metrics.set([]);
     inFlightRequests.set(0);
+    downloadProgress.set(null);
     return;
   }
 
@@ -58,6 +127,7 @@ export function enableAPIEvents(enabled: boolean): void {
       upstreamLogs.set("");
       metrics.set([]);
       inFlightRequests.set(0);
+      downloadProgress.set(null);
       models.set([]);
       retryCount = 0;
       connectionState.set("connected");
@@ -85,6 +155,7 @@ export function enableAPIEvents(enabled: boolean): void {
                 break;
               case "upstream":
                 appendLog(logData.data, upstreamLogs);
+                updateDownloadProgress(logData.data);
                 break;
             }
             break;

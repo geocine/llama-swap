@@ -1,10 +1,11 @@
-import type { Model, ModelStatus } from "./types";
+import type { Model, ModelDownloadProgress, ModelStatus } from "./types";
 
 export interface ChatModelLoadingState {
   modelId: string;
   state: ModelStatus;
   label: string;
   elapsedMs: number;
+  downloadProgress?: ModelDownloadProgress | null;
 }
 
 export function resolveSelectedModel(models: Model[], selectedModel: string): Model | undefined {
@@ -32,7 +33,8 @@ export function getChatModelLoadingState(
   isStreaming: boolean,
   hasReceivedOutput: boolean,
   requestStartedAt: number,
-  now: number
+  now: number,
+  downloadProgress: ModelDownloadProgress | null = null
 ): ChatModelLoadingState | null {
   if (!isStreaming || hasReceivedOutput || !selectedModel || requestStartedAt <= 0) {
     return null;
@@ -45,6 +47,7 @@ export function getChatModelLoadingState(
       state: "unknown",
       label: "Waiting for model status",
       elapsedMs: now - requestStartedAt,
+      downloadProgress,
     };
   }
 
@@ -64,7 +67,8 @@ export function getChatModelLoadingState(
   return {
     modelId: model.id,
     state: model.state,
-    label: labels[model.state],
+    label: downloadProgress?.active ? downloadProgress.message : labels[model.state],
     elapsedMs: now - requestStartedAt,
+    downloadProgress,
   };
 }

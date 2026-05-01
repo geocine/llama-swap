@@ -74,6 +74,10 @@
       ? (promptProgressTokens / promptProgress.time_ms) * 1000
       : 0
   );
+  let download = $derived(loadingState?.downloadProgress ?? null);
+  let downloadPercent = $derived(
+    typeof download?.percent === "number" ? Math.min(100, Math.max(0, download.percent)) : null
+  );
   let hasTimings = $derived(
     tokensPerSecond > 0 ||
       (timings?.predicted_n ?? 0) > 0 ||
@@ -305,12 +309,28 @@
               </span>
             </div>
             <div class="mt-1 font-mono text-[11px] uppercase tracking-widest text-txtmuted">
-              {loadingState.state} · {formatElapsed(loadingState.elapsedMs)}
+              {#if download?.active}
+                {download.downloadedBytes ?? "0 B"}{#if download.totalBytes} / {download.totalBytes}{/if}
+                {#if downloadPercent !== null} · {downloadPercent.toFixed(1)}%{/if}
+              {:else if download}
+                {download.message}
+              {:else}
+                {loadingState.state} · {formatElapsed(loadingState.elapsedMs)}
+              {/if}
             </div>
+            {#if download?.filename}
+              <div class="mt-1 truncate font-mono text-[10px] text-txtmuted" title={download.filename}>
+                {download.filename}
+              </div>
+            {/if}
           </div>
         </div>
         <div class="h-1 overflow-hidden bg-zinc-800">
-          <div class="loading-progress h-full w-1/2 bg-white"></div>
+          {#if downloadPercent !== null}
+            <div class="h-full bg-white transition-[width] duration-300" style={`width: ${downloadPercent}%`}></div>
+          {:else}
+            <div class="loading-progress h-full w-1/2 bg-white"></div>
+          {/if}
         </div>
       </div>
     {:else}
