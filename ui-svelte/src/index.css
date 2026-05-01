@@ -184,3 +184,13 @@
     margin-bottom: 2rem;
   }
 }
+
+/* Chromium's user-agent stylesheet applies `overflow: auto` to dialogs in
+   the top layer (via the dialog:-internal-dialog-in-top-layer selector).
+   Combined with our own inner scrollable panels that produces a double
+   scrollbar, so we delegate scrolling to the inner panel and clip the
+   dialog itself. Author origin trumps UA at the same specificity tier,
+   so this plain `dialog` selector reliably wins. */
+dialog {
+  overflow: hidden;
+}

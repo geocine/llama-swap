@@ -193,7 +193,7 @@
 <dialog
   bind:this={dialogEl}
   onclose={handleDialogClose}
-  class="bg-surface text-txtmain rounded-sm shadow-2xl max-w-4xl w-full max-h-[90vh] p-0 backdrop:bg-black/70 m-auto border border-border outline-none focus:outline-none"
+  class="bg-surface text-txtmain rounded-sm shadow-2xl max-w-4xl w-full max-h-[90vh] p-0 backdrop:bg-black/70 m-auto border border-border outline-none focus:outline-none overflow-hidden"
 >
   {#if capture}
     <div class="flex flex-col max-h-[90vh]">

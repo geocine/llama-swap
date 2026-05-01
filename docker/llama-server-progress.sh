@@ -7,6 +7,7 @@ PROGRESS_INTERVAL="${LLAMA_DOWNLOAD_PROGRESS_INTERVAL:-15}"
 DOWNLOAD_META_DIR=""
 SERVER_LOG_PIPE=""
 ACTIVE_DOWNLOADS_FILE=""
+MONITOR_START_EPOCH=0
 
 format_bytes() {
     bytes="$1"
@@ -173,7 +174,12 @@ collect_active_downloads() {
     printf '%s\n' "$cache_dirs" | while IFS= read -r cache_dir; do
         [ -n "$cache_dir" ] || continue
         [ -d "$cache_dir" ] || continue
-        find "$cache_dir" -type f -name '*.downloadInProgress' 2>/dev/null >> "$tmp_file" || true
+        find "$cache_dir" -type f -name '*.downloadInProgress' 2>/dev/null | while IFS= read -r candidate; do
+            mtime="$(stat -c %Y "$candidate" 2>/dev/null || stat -f %m "$candidate" 2>/dev/null || printf '0')"
+            if [ "$mtime" -ge "$MONITOR_START_EPOCH" ] 2>/dev/null; then
+                printf '%s\n' "$candidate" >> "$tmp_file"
+            fi
+        done
     done
 
     sort -u "$tmp_file" > "$output_file"
@@ -338,6 +344,7 @@ cleanup() {
 CACHE_DIRS="$(resolve_cache_dirs)"
 DOWNLOAD_META_DIR="$(mktemp -d)"
 ACTIVE_DOWNLOADS_FILE="$DOWNLOAD_META_DIR/active-downloads"
+MONITOR_START_EPOCH="$(date +%s)"
 : > "$ACTIVE_DOWNLOADS_FILE"
 SERVER_LOG_PIPE="$(mktemp -u)"
 mkfifo "$SERVER_LOG_PIPE"

@@ -61,6 +61,13 @@
         >
           {$appTitle}
         </h1>
+        <span
+          class="select-none rounded-sm border border-border bg-surface px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-txtsecondary"
+          title="geocine edition"
+          aria-label="geocine edition"
+        >
+          geocine edition
+        </span>
       </div>
     {/if}
   </div>

@@ -52,7 +52,7 @@
   onclose={dismiss}
   onclick={handleBackdropClick}
   onkeydown={handleKeydown}
-  class="confirm-dialog bg-surface text-txtmain rounded-sm shadow-2xl w-full max-w-md p-0 backdrop:bg-black/70 m-auto border border-border outline-none focus:outline-none"
+  class="confirm-dialog bg-surface text-txtmain rounded-sm shadow-2xl w-full max-w-md p-0 backdrop:bg-black/70 m-auto border border-border outline-none focus:outline-none overflow-hidden"
 >
   {#if $confirmState.open}
     <div class="flex flex-col">
