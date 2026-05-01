@@ -171,6 +171,10 @@ func New(proxyConfig config.Config) *ProxyManager {
 	} else {
 		maxMetrics = proxyConfig.MetricsMaxInMemory
 	}
+	captureKey := ""
+	if len(proxyConfig.RequiredAPIKeys) > 0 {
+		captureKey = proxyConfig.RequiredAPIKeys[0]
+	}
 
 	peerProxy, err := NewPeerProxy(proxyConfig.Peers, proxyLogger)
 	if err != nil {
@@ -186,7 +190,7 @@ func New(proxyConfig config.Config) *ProxyManager {
 		muxLogger:      muxLogger,
 		upstreamLogger: upstreamLogger,
 
-		metricsMonitor: newMetricsMonitor(proxyLogger, maxMetrics, proxyConfig.CaptureBuffer),
+		metricsMonitor: newMetricsMonitor(proxyLogger, maxMetrics, proxyConfig.CaptureBuffer, proxyConfig.CaptureDBPath, captureKey),
 
 		processGroups: make(map[string]*ProcessGroup),
 
@@ -477,6 +481,11 @@ func (pm *ProxyManager) Shutdown() {
 		}(processGroup)
 	}
 	wg.Wait()
+	if pm.metricsMonitor != nil {
+		if err := pm.metricsMonitor.close(); err != nil {
+			pm.proxyLogger.Warnf("error closing capture sqlite database: %v", err)
+		}
+	}
 	pm.shutdownCancel()
 }
 

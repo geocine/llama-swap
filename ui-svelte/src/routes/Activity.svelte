@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { metrics, getCapture } from "../stores/api";
+  import { metrics, getCapture, downloadActivityDB, clearActivity } from "../stores/api";
   import Tooltip from "../components/Tooltip.svelte";
   import CaptureDialog from "../components/CaptureDialog.svelte";
   import type { ReqRespCapture } from "../lib/types";
@@ -44,6 +44,9 @@
   let selectedCapture = $state<ReqRespCapture | null>(null);
   let dialogOpen = $state(false);
   let loadingCaptureId = $state<number | null>(null);
+  let missingCaptureIds = $state<Set<number>>(new Set());
+  let downloadingDB = $state(false);
+  let clearingActivity = $state(false);
 
   async function viewCapture(id: number) {
     loadingCaptureId = id;
@@ -52,6 +55,8 @@
     if (capture) {
       selectedCapture = capture;
       dialogOpen = true;
+    } else {
+      missingCaptureIds = new Set([...missingCaptureIds, id]);
     }
   }
 
@@ -59,10 +64,42 @@
     dialogOpen = false;
     selectedCapture = null;
   }
+
+  async function downloadDB() {
+    downloadingDB = true;
+    try {
+      await downloadActivityDB();
+    } finally {
+      downloadingDB = false;
+    }
+  }
+
+  async function clearAllActivity() {
+    if (!window.confirm("Clear activity and captures?")) {
+      return;
+    }
+    clearingActivity = true;
+    try {
+      await clearActivity();
+      missingCaptureIds = new Set();
+    } finally {
+      clearingActivity = false;
+    }
+  }
 </script>
 
 <div class="p-2">
-  <h1 class="text-sm font-bold uppercase tracking-wide">Activity</h1>
+  <div class="mb-3 flex items-center justify-between gap-3">
+    <h1 class="text-sm font-bold uppercase tracking-wide">Activity</h1>
+    <div class="flex items-center gap-2">
+      <button class="btn btn--sm" onclick={downloadDB} disabled={downloadingDB || $metrics.length === 0}>
+        {downloadingDB ? "..." : "Download DB"}
+      </button>
+      <button class="btn btn--sm" onclick={clearAllActivity} disabled={clearingActivity || $metrics.length === 0}>
+        {clearingActivity ? "..." : "Clear"}
+      </button>
+    </div>
+  </div>
 
   {#if $metrics.length === 0}
     <div class="text-center py-8">
@@ -102,7 +139,7 @@
               <td class="px-4 py-3 font-mono">{formatSpeed(metric.tokens_per_second)}</td>
               <td class="px-4 py-3 font-mono">{formatDuration(metric.duration_ms)}</td>
               <td class="px-4 py-3">
-                {#if metric.has_capture}
+                {#if metric.has_capture && !missingCaptureIds.has(metric.id)}
                   <button
                     onclick={() => viewCapture(metric.id)}
                     disabled={loadingCaptureId === metric.id}

@@ -4,10 +4,17 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/mostlygeek/llama-swap/event"
 	"github.com/tidwall/gjson"
+	_ "modernc.org/sqlite"
 )
 
 // TokenMetrics represents parsed token statistics from llama-server logs
@@ -61,6 +69,13 @@ func (e TokenMetricsEvent) Type() uint32 {
 	return TokenMetricsEventID // defined in events.go
 }
 
+type storedCapture struct {
+	capture  ReqRespCapture
+	size     int
+	created  int64
+	decrypts bool
+}
+
 // metricsMonitor parses llama-server output for token statistics
 type metricsMonitor struct {
 	mu         sync.RWMutex
@@ -71,24 +86,56 @@ type metricsMonitor struct {
 
 	// capture fields
 	enableCaptures bool
-	captures       map[int]ReqRespCapture // map for O(1) lookup by ID
-	captureOrder   []int                  // track insertion order for FIFO eviction
-	captureSize    int                    // current total size in bytes
-	maxCaptureSize int                    // max bytes for captures
+	captureDB      *sql.DB
+	captureDBPath  string
+	captureCipher  cipher.AEAD
 }
 
 // newMetricsMonitor creates a new metricsMonitor. captureBufferMB is the
-// capture buffer size in megabytes; 0 disables captures.
-func newMetricsMonitor(logger *LogMonitor, maxMetrics int, captureBufferMB int) *metricsMonitor {
-	return &metricsMonitor{
+// legacy capture buffer setting; 0 disables captures. When captures are enabled,
+// bodies are persisted in SQLite instead of being held in memory.
+func newMetricsMonitor(logger *LogMonitor, maxMetrics int, captureBufferMB int, captureDBPath ...string) *metricsMonitor {
+	dbPath := ":memory:"
+	if len(captureDBPath) > 0 && strings.TrimSpace(captureDBPath[0]) != "" {
+		dbPath = captureDBPath[0]
+	}
+	captureSecret := ""
+	if len(captureDBPath) > 1 {
+		captureSecret = captureDBPath[1]
+	}
+
+	mp := &metricsMonitor{
 		logger:         logger,
 		maxMetrics:     maxMetrics,
 		enableCaptures: captureBufferMB > 0,
-		captures:       make(map[int]ReqRespCapture),
-		captureOrder:   make([]int, 0),
-		captureSize:    0,
-		maxCaptureSize: captureBufferMB * 1024 * 1024,
+		captureDBPath:  dbPath,
 	}
+
+	if mp.enableCaptures {
+		db, err := openCaptureDB(dbPath)
+		if err != nil {
+			logger.Warnf("failed to initialize capture sqlite database %q: %v; captures disabled", dbPath, err)
+			mp.enableCaptures = false
+		} else {
+			mp.captureDB = db
+		}
+
+		if captureSecret != "" {
+			captureCipher, err := newCaptureCipher(captureSecret)
+			if err != nil {
+				logger.Warnf("failed to initialize capture encryption: %v; captures disabled", err)
+				mp.enableCaptures = false
+				if mp.captureDB != nil {
+					mp.captureDB.Close()
+					mp.captureDB = nil
+				}
+			} else {
+				mp.captureCipher = captureCipher
+			}
+		}
+	}
+
+	return mp
 }
 
 // addMetrics adds a new metric to the collection and publishes an event.
@@ -107,63 +154,428 @@ func (mp *metricsMonitor) addMetrics(metric TokenMetrics) int {
 	return metric.ID
 }
 
-// addCapture adds a new capture to the buffer with size-based eviction.
-// Captures are skipped if enableCaptures is false or if capture exceeds maxCaptureSize.
-func (mp *metricsMonitor) addCapture(capture ReqRespCapture) {
-	if !mp.enableCaptures {
-		return
+func createCaptureSchema(db *sql.DB) error {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS captures (
+			id INTEGER PRIMARY KEY,
+			req_path BLOB NOT NULL,
+			req_headers BLOB NOT NULL,
+			req_body BLOB,
+			resp_headers BLOB NOT NULL,
+			resp_body BLOB,
+			size INTEGER NOT NULL,
+			encrypted INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return err
 	}
-
-	mp.mu.Lock()
-	defer mp.mu.Unlock()
-
-	captureSize := capture.Size()
-	if captureSize > mp.maxCaptureSize {
-		mp.logger.Warnf("capture size %d exceeds max %d, skipping", captureSize, mp.maxCaptureSize)
-		return
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS captures_created_at_idx ON captures(created_at)`); err != nil {
+		return err
 	}
+	if _, err := db.Exec(`ALTER TABLE captures ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0`); err != nil {
+		errText := strings.ToLower(err.Error())
+		if !strings.Contains(errText, "duplicate column") {
+			return err
+		}
+	}
+	return nil
+}
 
-	// Evict oldest (FIFO) until room available
-	for mp.captureSize+captureSize > mp.maxCaptureSize && len(mp.captureOrder) > 0 {
-		oldestID := mp.captureOrder[0]
-		mp.captureOrder = mp.captureOrder[1:]
-		if evicted, exists := mp.captures[oldestID]; exists {
-			mp.captureSize -= evicted.Size()
-			delete(mp.captures, oldestID)
+func openCaptureDB(dbPath string) (*sql.DB, error) {
+	if dbPath != ":memory:" {
+		dir := filepath.Dir(dbPath)
+		if dir != "." && dir != "" {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	mp.captures[capture.ID] = capture
-	mp.captureOrder = append(mp.captureOrder, capture.ID)
-	mp.captureSize += captureSize
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if dbPath != ":memory:" {
+		if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	if err := createCaptureSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func newCaptureCipher(secret string) (cipher.AEAD, error) {
+	key := sha256.Sum256([]byte("llama-swap capture db\x00" + secret))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func encryptCaptureField(aead cipher.AEAD, value []byte) ([]byte, error) {
+	if aead == nil {
+		return value, nil
+	}
+
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	return aead.Seal(nonce, nonce, value, nil), nil
+}
+
+func decryptCaptureField(aead cipher.AEAD, value []byte) ([]byte, error) {
+	if aead == nil {
+		return value, nil
+	}
+	if len(value) < aead.NonceSize() {
+		return nil, fmt.Errorf("encrypted capture field is too short")
+	}
+	nonce := value[:aead.NonceSize()]
+	ciphertext := value[aead.NonceSize():]
+	return aead.Open(nil, nonce, ciphertext, nil)
+}
+
+// addCapture adds a new capture to the buffer with size-based eviction.
+// Captures are skipped if enableCaptures is false.
+func (mp *metricsMonitor) addCapture(capture ReqRespCapture) {
+	if !mp.enableCaptures || mp.captureDB == nil {
+		return
+	}
+
+	reqHeaders, err := json.Marshal(capture.ReqHeaders)
+	if err != nil {
+		mp.logger.Warnf("failed to marshal capture request headers for metric %d: %v", capture.ID, err)
+		mp.setMetricCaptureAvailable(capture.ID, false)
+		return
+	}
+	respHeaders, err := json.Marshal(capture.RespHeaders)
+	if err != nil {
+		mp.logger.Warnf("failed to marshal capture response headers for metric %d: %v", capture.ID, err)
+		mp.setMetricCaptureAvailable(capture.ID, false)
+		return
+	}
+
+	reqPath := []byte(capture.ReqPath)
+	reqBody := capture.ReqBody
+	respBody := capture.RespBody
+	encrypted := 0
+	if mp.captureCipher != nil {
+		encrypted = 1
+	}
+	fields := []*[]byte{&reqPath, &reqHeaders, &reqBody, &respHeaders, &respBody}
+	for _, field := range fields {
+		encryptedField, err := encryptCaptureField(mp.captureCipher, *field)
+		if err != nil {
+			mp.logger.Warnf("failed to encrypt capture %d: %v", capture.ID, err)
+			mp.setMetricCaptureAvailable(capture.ID, false)
+			return
+		}
+		*field = encryptedField
+	}
+
+	_, err = mp.captureDB.Exec(`
+		INSERT OR REPLACE INTO captures
+			(id, req_path, req_headers, req_body, resp_headers, resp_body, size, encrypted, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		capture.ID,
+		reqPath,
+		reqHeaders,
+		reqBody,
+		respHeaders,
+		respBody,
+		capture.Size(),
+		encrypted,
+		time.Now().UnixNano(),
+	)
+	if err != nil {
+		mp.logger.Warnf("failed to store capture %d in sqlite: %v", capture.ID, err)
+		mp.setMetricCaptureAvailable(capture.ID, false)
+		return
+	}
+	mp.setMetricCaptureAvailable(capture.ID, true)
+}
+
+func (mp *metricsMonitor) setMetricCaptureAvailable(id int, available bool) {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	mp.setMetricCaptureAvailableLocked(id, available)
+}
+
+func (mp *metricsMonitor) setMetricCaptureAvailableLocked(id int, available bool) {
+	for i := range mp.metrics {
+		if mp.metrics[i].ID == id {
+			mp.metrics[i].HasCapture = available
+			return
+		}
+	}
+}
+
+func (mp *metricsMonitor) scanStoredCapture(row interface {
+	Scan(dest ...any) error
+}, id int) (*storedCapture, error) {
+	var capture ReqRespCapture
+	var reqPath []byte
+	var reqHeaders []byte
+	var respHeaders []byte
+	var encrypted int
+	var size int
+	var created int64
+	err := row.Scan(
+		&capture.ID,
+		&reqPath,
+		&reqHeaders,
+		&capture.ReqBody,
+		&respHeaders,
+		&capture.RespBody,
+		&size,
+		&encrypted,
+		&created,
+	)
+	if err != nil {
+		return nil, err
+	}
+	logID := id
+	if logID == 0 {
+		logID = capture.ID
+	}
+	if encrypted == 1 {
+		if mp.captureCipher == nil {
+			return nil, fmt.Errorf("capture %d is encrypted but no capture key is configured", logID)
+		}
+		fields := []*[]byte{&reqPath, &reqHeaders, &capture.ReqBody, &respHeaders, &capture.RespBody}
+		for _, field := range fields {
+			decryptedField, err := decryptCaptureField(mp.captureCipher, *field)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt capture %d: %w", logID, err)
+			}
+			*field = decryptedField
+		}
+	}
+
+	capture.ReqPath = string(reqPath)
+	if err := json.Unmarshal(reqHeaders, &capture.ReqHeaders); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal capture request headers for metric %d: %w", logID, err)
+	}
+	if err := json.Unmarshal(respHeaders, &capture.RespHeaders); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal capture response headers for metric %d: %w", logID, err)
+	}
+	return &storedCapture{
+		capture:  capture,
+		size:     size,
+		created:  created,
+		decrypts: encrypted == 1,
+	}, nil
+}
+
+func (mp *metricsMonitor) getStoredCaptureByID(id int) (*storedCapture, error) {
+	if !mp.enableCaptures || mp.captureDB == nil {
+		return nil, sql.ErrNoRows
+	}
+
+	row := mp.captureDB.QueryRow(`
+		SELECT id, req_path, req_headers, req_body, resp_headers, resp_body, size, encrypted, created_at
+		FROM captures
+		WHERE id = ?
+	`, id)
+	return mp.scanStoredCapture(row, id)
 }
 
 // getCaptureByID returns a capture by its ID, or nil if not found.
 func (mp *metricsMonitor) getCaptureByID(id int) *ReqRespCapture {
-	mp.mu.RLock()
-	defer mp.mu.RUnlock()
-
-	if capture, exists := mp.captures[id]; exists {
-		return &capture
+	stored, err := mp.getStoredCaptureByID(id)
+	if err == sql.ErrNoRows {
+		return nil
 	}
-	return nil
+	if err != nil {
+		mp.logger.Warnf("failed to load capture %d from sqlite: %v", id, err)
+		return nil
+	}
+	return &stored.capture
+}
+
+func (mp *metricsMonitor) captureExists(id int) bool {
+	if !mp.enableCaptures || mp.captureDB == nil {
+		return false
+	}
+
+	var exists int
+	err := mp.captureDB.QueryRow(`SELECT 1 FROM captures WHERE id = ? LIMIT 1`, id).Scan(&exists)
+	return err == nil
 }
 
 // getMetrics returns a copy of the current metrics
 func (mp *metricsMonitor) getMetrics() []TokenMetrics {
 	mp.mu.RLock()
-	defer mp.mu.RUnlock()
-
 	result := make([]TokenMetrics, len(mp.metrics))
 	copy(result, mp.metrics)
+	mp.mu.RUnlock()
+
+	for i := range result {
+		result[i].HasCapture = result[i].HasCapture && mp.captureExists(result[i].ID)
+	}
 	return result
 }
 
 // getMetricsJSON returns metrics as JSON
 func (mp *metricsMonitor) getMetricsJSON() ([]byte, error) {
-	mp.mu.RLock()
-	defer mp.mu.RUnlock()
-	return json.Marshal(mp.metrics)
+	return json.Marshal(mp.getMetrics())
+}
+
+func (mp *metricsMonitor) clearActivity() error {
+	if mp.captureDB != nil {
+		if _, err := mp.captureDB.Exec(`DELETE FROM captures`); err != nil {
+			return err
+		}
+		if _, err := mp.captureDB.Exec(`VACUUM`); err != nil {
+			return err
+		}
+	}
+
+	mp.mu.Lock()
+	mp.metrics = nil
+	mp.nextID = 0
+	mp.mu.Unlock()
+	event.Emit(ActivityClearedEvent{})
+	return nil
+}
+
+func (mp *metricsMonitor) exportActivityDB(exportPath string) error {
+	db, err := sql.Open("sqlite", exportPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	if err := createCaptureSchema(db); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS metrics (
+			id INTEGER PRIMARY KEY,
+			timestamp TEXT NOT NULL,
+			model TEXT NOT NULL,
+			cache_tokens INTEGER NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			prompt_per_second REAL NOT NULL,
+			tokens_per_second REAL NOT NULL,
+			duration_ms INTEGER NOT NULL,
+			has_capture INTEGER NOT NULL
+		)
+	`); err != nil {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	for _, metric := range mp.getMetrics() {
+		hasCapture := 0
+		if metric.HasCapture {
+			hasCapture = 1
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO metrics
+				(id, timestamp, model, cache_tokens, input_tokens, output_tokens, prompt_per_second, tokens_per_second, duration_ms, has_capture)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			metric.ID,
+			metric.Timestamp.Format(time.RFC3339Nano),
+			metric.Model,
+			metric.CachedTokens,
+			metric.InputTokens,
+			metric.OutputTokens,
+			metric.PromptPerSecond,
+			metric.TokensPerSecond,
+			metric.DurationMs,
+			hasCapture,
+		); err != nil {
+			return err
+		}
+	}
+
+	if mp.captureDB != nil {
+		rows, err := mp.captureDB.Query(`
+			SELECT id, req_path, req_headers, req_body, resp_headers, resp_body, size, encrypted, created_at
+			FROM captures
+			ORDER BY id
+		`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			stored, err := mp.scanStoredCapture(rows, 0)
+			if err != nil {
+				return err
+			}
+			reqHeaders, err := json.Marshal(stored.capture.ReqHeaders)
+			if err != nil {
+				return err
+			}
+			respHeaders, err := json.Marshal(stored.capture.RespHeaders)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`
+				INSERT OR REPLACE INTO captures
+					(id, req_path, req_headers, req_body, resp_headers, resp_body, size, encrypted, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+			`,
+				stored.capture.ID,
+				[]byte(stored.capture.ReqPath),
+				reqHeaders,
+				stored.capture.ReqBody,
+				respHeaders,
+				stored.capture.RespBody,
+				stored.size,
+				stored.created,
+			); err != nil {
+				return err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (mp *metricsMonitor) close() error {
+	if mp.captureDB == nil {
+		return nil
+	}
+	return mp.captureDB.Close()
 }
 
 // wrapHandler wraps the proxy handler to extract token metrics
@@ -290,10 +702,7 @@ func (mp *metricsMonitor) wrapHandler(
 			RespHeaders: respHeaders,
 			RespBody:    body,
 		}
-		// Only set HasCapture if the capture will actually be stored (not too large)
-		if capture.Size() <= mp.maxCaptureSize {
-			tm.HasCapture = true
-		}
+		tm.HasCapture = mp.enableCaptures && mp.captureDB != nil
 	}
 
 	metricID := mp.addMetrics(tm)

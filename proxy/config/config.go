@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -124,6 +125,7 @@ type Config struct {
 	LogToStdout        string                 `yaml:"logToStdout"`
 	MetricsMaxInMemory int                    `yaml:"metricsMaxInMemory"`
 	CaptureBuffer      int                    `yaml:"captureBuffer"`
+	CaptureDBPath      string                 `yaml:"captureDBPath"`
 	GlobalTTL          int                    `yaml:"globalTTL"`
 	Models             map[string]ModelConfig `yaml:"models"` /* key is model ID */
 	Profiles           map[string][]string    `yaml:"profiles"`
@@ -152,6 +154,16 @@ type Config struct {
 
 	// support remote peers, see issue #433, #296
 	Peers PeerDictionaryConfig `yaml:"peers"`
+}
+
+func defaultCaptureDBPath() string {
+	if cacheDir := strings.TrimSpace(os.Getenv("LLAMA_CACHE")); cacheDir != "" {
+		return filepath.Join(cacheDir, "llama-swap-captures.sqlite")
+	}
+	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
+		return filepath.Join(cacheDir, "llama-swap", "llama-swap-captures.sqlite")
+	}
+	return "llama-swap-captures.sqlite"
 }
 
 func (c *Config) RealModelName(search string) (string, bool) {
@@ -204,6 +216,7 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		LogToStdout:        LogToStdoutProxy,
 		MetricsMaxInMemory: 1000,
 		CaptureBuffer:      5,
+		CaptureDBPath:      defaultCaptureDBPath(),
 		GlobalTTL:          0,
 	}
 	if err = yaml.Unmarshal([]byte(yamlStr), &config); err != nil {

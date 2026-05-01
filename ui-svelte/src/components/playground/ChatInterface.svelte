@@ -24,9 +24,26 @@
   import type { ChatMessage, ChatMessagePromptProgress, ChatMessageTimings, ContentPart } from "../../lib/types";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import ModelSelector from "./ModelSelector.svelte";
-  import { Archive, ImageIcon, PanelLeftOpen, Plus, Send, Settings, Square, X } from "lucide-svelte";
+  import {
+    Archive,
+    BarChart3,
+    ImageIcon,
+    PanelLeftOpen,
+    Plus,
+    Send,
+    Settings,
+    Square,
+    Target,
+    X,
+  } from "lucide-svelte";
   import { get } from "svelte/store";
   import { sidebarOpen } from "../../stores/playgroundUI";
+
+  type AttachedImage = {
+    url: string;
+    name: string;
+    size: number;
+  };
 
   const selectedModelStore = persistentStore<string>("playground-selected-model", "");
   const systemPromptStore = persistentStore<string>("playground-system-prompt", "");
@@ -89,7 +106,7 @@
   let textareaEl: HTMLTextAreaElement | undefined = $state();
   let composerWrap: HTMLDivElement | undefined = $state();
   let showSettings = $state(false);
-  let attachedImages = $state<string[]>([]);
+  let attachedImages = $state<AttachedImage[]>([]);
   let fileInput = $state<HTMLInputElement | null>(null);
   let imageError = $state<string | null>(null);
   let requestStartedAt = $state(0);
@@ -131,7 +148,6 @@
   );
   let outputUsed = $derived(latestTimings?.predicted_n ?? 0);
   let liveTokensPerSecond = $derived(calculateLiveTokensPerSecond(latestTimings, latestPromptProgress));
-  let liveStatsText = $derived(buildLiveStatsText(contextUsed, contextTotal, contextPercent, outputUsed, liveTokensPerSecond));
   let canCompact = $derived(
     !isStreaming && !isCompacting && !!$selectedModelStore && messages.length > 7 && planConversationCompaction(messages, contextTotal) !== null
   );
@@ -167,12 +183,13 @@
   });
 
   // Auto-grow textarea (capped — overflow scrolls inside the textarea)
+  const TEXTAREA_MIN_PX = 48;
   const TEXTAREA_MAX_PX = 200;
   $effect(() => {
     void userInput;
     if (textareaEl) {
       textareaEl.style.height = "auto";
-      const next = Math.min(textareaEl.scrollHeight, TEXTAREA_MAX_PX);
+      const next = Math.max(TEXTAREA_MIN_PX, Math.min(textareaEl.scrollHeight, TEXTAREA_MAX_PX));
       textareaEl.style.height = `${next}px`;
       textareaEl.style.overflowY = textareaEl.scrollHeight > TEXTAREA_MAX_PX ? "auto" : "hidden";
     }
@@ -188,6 +205,7 @@
       target.style.setProperty("--composer-height", `${composerWrap.offsetHeight}px`);
     };
     update();
+    requestAnimationFrame(update);
     const ro = new ResizeObserver(update);
     ro.observe(composerWrap);
     return () => ro.disconnect();
@@ -208,8 +226,8 @@
       if (trimmedInput) {
         parts.push({ type: "text", text: trimmedInput });
       }
-      for (const url of attachedImages) {
-        parts.push({ type: "image_url", image_url: { url } });
+      for (const image of attachedImages) {
+        parts.push({ type: "image_url", image_url: { url: image.url } });
       }
       content = parts;
     } else {
@@ -437,10 +455,15 @@
     return null;
   }
 
-  function fileToDataUrl(file: File): Promise<string> {
+  function fileToAttachedImage(file: File): Promise<AttachedImage> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
+      reader.onload = () =>
+        resolve({
+          url: reader.result as string,
+          name: file.name || "image",
+          size: file.size,
+        });
       reader.onerror = () => reject(new Error("Failed to read file"));
       reader.readAsDataURL(file);
     });
@@ -463,11 +486,19 @@
     }
 
     try {
-      const dataUrls = await Promise.all(files.map(fileToDataUrl));
-      attachedImages = [...attachedImages, ...dataUrls];
+      const newImages = await Promise.all(files.map(fileToAttachedImage));
+      attachedImages = [...attachedImages, ...newImages];
     } catch (error) {
       imageError = error instanceof Error ? error.message : "Failed to process images";
     }
+  }
+
+  function formatFileSize(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
   function handleImageSelect(event: Event) {
@@ -477,6 +508,33 @@
     }
     // Reset the input so the same file can be selected again
     input.value = "";
+  }
+
+  function handlePaste(event: ClipboardEvent) {
+    const clipboardData = event.clipboardData;
+    if (!clipboardData) return;
+
+    const files: File[] = [];
+    for (const item of Array.from(clipboardData.items)) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          files.push(file);
+        }
+      }
+    }
+
+    if (files.length === 0) {
+      for (const file of Array.from(clipboardData.files)) {
+        if (file.type.startsWith("image/")) {
+          files.push(file);
+        }
+      }
+    }
+
+    if (files.length === 0) return;
+    event.preventDefault();
+    void processImageFiles(files);
   }
 
   function removeImage(idx: number) {
@@ -549,25 +607,6 @@
     return 0;
   }
 
-  function buildLiveStatsText(
-    used: number,
-    total: number,
-    percent: number,
-    output: number,
-    tokensPerSecond: number
-  ): string {
-    const parts: string[] = [];
-    if (total > 0) {
-      parts.push(`Context: ${used.toLocaleString()}/${total.toLocaleString()} (${percent}%)`);
-    }
-    if (output > 0) {
-      parts.push(`Output: ${output.toLocaleString()}/∞`);
-    }
-    if (tokensPerSecond > 0) {
-      parts.push(`${tokensPerSecond.toFixed(1)} t/s`);
-    }
-    return parts.join(" · ");
-  }
 </script>
 
 <div class="relative flex h-full min-h-0 flex-col">
@@ -732,28 +771,42 @@
 
 {#snippet composer()}
   <div
-    class="rounded-sm border border-border bg-surface shadow-2xl shadow-black/40 transition-colors duration-150 focus-within:border-border-hover"
+    class="composer overflow-hidden rounded-sm border border-border bg-surface shadow-2xl shadow-black/40 transition-colors duration-150 focus-within:border-border-hover"
   >
-    <!-- Image previews -->
+    <!-- Image attachment cards -->
     {#if attachedImages.length > 0}
-      <div class="flex flex-wrap gap-2 px-3 pt-3">
-        {#each attachedImages as imageUrl, idx (idx)}
-          <div class="group relative">
-            <img
-              src={imageUrl}
-              alt="Attached image {idx + 1}"
-              class="h-16 w-16 rounded-sm border border-border object-cover"
-            />
-            <button
-              class="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-sm border border-border bg-zinc-900 text-txtsecondary opacity-0 transition-opacity duration-150 hover:text-white group-hover:opacity-100"
-              onclick={() => removeImage(idx)}
-              title="Remove image"
-              aria-label="Remove image"
+      <div class="composer-attachments overflow-x-auto px-3 pt-3 pb-1">
+        <div class="flex gap-2.5">
+          {#each attachedImages as image, idx (idx)}
+            <div
+              class="group relative flex w-44 shrink-0 flex-col overflow-hidden rounded-sm border border-border bg-zinc-950 transition-colors duration-150 hover:border-border-hover"
             >
-              <X class="h-3 w-3" />
-            </button>
-          </div>
-        {/each}
+              <div class="relative h-20 w-full overflow-hidden bg-black">
+                <img
+                  src={image.url}
+                  alt={image.name}
+                  class="h-full w-full object-cover"
+                />
+                <button
+                  class="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-sm bg-black/70 text-white/85 ring-1 ring-white/15 backdrop-blur-sm transition-colors hover:bg-black/90 hover:text-white"
+                  onclick={() => removeImage(idx)}
+                  title="Remove image"
+                  aria-label="Remove image"
+                >
+                  <X class="h-3 w-3" />
+                </button>
+              </div>
+              <div class="px-2.5 py-1.5">
+                <div class="truncate font-mono text-[11px] text-txtmain" title={image.name}>
+                  {image.name}
+                </div>
+                <div class="font-mono text-[10px] text-txtmuted">
+                  {formatFileSize(image.size)}
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
       </div>
     {/if}
 
@@ -779,66 +832,107 @@
       onchange={handleImageSelect}
     />
 
-    <!-- Textarea -->
-    <textarea
-      bind:this={textareaEl}
-      bind:value={userInput}
-      onkeydown={handleKeyDown}
-      disabled={isStreaming || isCompacting || !$selectedModelStore}
-      placeholder={isCompacting ? "Compacting context..." : $selectedModelStore ? "Send a message..." : "Select a model to start..."}
-      rows="1"
-      class="block w-full resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 text-txtmain placeholder-zinc-700 outline-none disabled:opacity-50"
-    ></textarea>
+    <!-- Textarea + inline send button -->
+    <div class="flex items-end gap-2 px-3 pt-3 pb-3">
+      <textarea
+        bind:this={textareaEl}
+        bind:value={userInput}
+        onkeydown={handleKeyDown}
+        onpaste={handlePaste}
+        disabled={isStreaming || isCompacting || !$selectedModelStore}
+        placeholder={isCompacting ? "Compacting context..." : $selectedModelStore ? "Message the agent..." : "Select a model to start..."}
+        rows="1"
+        class="min-h-12 flex-1 resize-none border-0 bg-transparent px-1 py-2 text-sm leading-6 text-txtmain placeholder-zinc-700 outline-none disabled:opacity-50"
+      ></textarea>
+      <button
+        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-border bg-black text-txtsecondary transition-all duration-150 hover:border-border-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        onclick={sendMessage}
+        disabled={!$chatsReady || isStreaming || isCompacting || (!userInput.trim() && attachedImages.length === 0) || !$selectedModelStore}
+        title="Send message"
+        aria-label="Send message"
+      >
+        <Send class="h-4 w-4" />
+      </button>
+    </div>
 
-    <!-- Action row -->
-    <div class="flex items-center justify-between gap-2 px-2 pb-2">
-      <div class="flex items-center gap-1">
+    <!-- Footer: hints | live stats | actions -->
+    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border bg-black/40 px-3 py-2">
+      <div class="hidden items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-txtmuted sm:flex">
+        <kbd class="rounded-sm border border-border bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-txtsecondary">
+          Enter
+        </kbd>
+        <span>to send</span>
+        <span class="text-txtmuted/70">·</span>
+        <kbd class="rounded-sm border border-border bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-txtsecondary">
+          Shift+Enter
+        </kbd>
+        <span>for newline</span>
+      </div>
+
+      <div class="flex items-center gap-3 font-mono text-[10px] uppercase tracking-wider text-txtsecondary">
+        {#if contextTotal > 0}
+          <span
+            class="flex items-center gap-1.5"
+            title={`${contextUsed.toLocaleString()} of ${contextTotal.toLocaleString()} (${contextPercent}%)`}
+          >
+            <Target class="h-3 w-3 text-txtmuted" />
+            <span>Context:</span>
+            <span class="text-txtmain">{contextUsed.toLocaleString()}</span>
+            <span class="text-txtmuted">/ {contextTotal.toLocaleString()}</span>
+            <span class="text-txtmuted">({contextPercent}%)</span>
+          </span>
+        {/if}
+        {#if outputUsed > 0 || liveTokensPerSecond > 0}
+          <span class="flex items-center gap-1.5">
+            <BarChart3 class="h-3 w-3 text-txtmuted" />
+            <span>Output:</span>
+            <span class="text-txtmain">{outputUsed.toLocaleString()}</span>
+            <span class="text-txtmuted">/ &infin;</span>
+            {#if liveTokensPerSecond > 0}
+              <span class="text-txtmuted/70">·</span>
+              <span class="text-txtmain">{liveTokensPerSecond.toFixed(1)}</span>
+              <span>T/S</span>
+            {/if}
+          </span>
+        {:else if contextTotal > 0 && contextAvailable > 0}
+          <span class="hidden items-center gap-1.5 md:flex" title={`${contextAvailable.toLocaleString()} tokens left`}>
+            <BarChart3 class="h-3 w-3 text-txtmuted" />
+            <span>Free:</span>
+            <span class="text-txtmain">{formatTokenCount(contextAvailable)}</span>
+          </span>
+        {/if}
+      </div>
+
+      <div class="ml-auto flex items-center gap-2">
         <button
-          class="btn p-2"
+          class="flex items-center gap-1.5 rounded-sm border border-border bg-zinc-950 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
           onclick={() => fileInput?.click()}
           disabled={isStreaming || isCompacting || !$selectedModelStore}
           title="Attach image"
           aria-label="Attach image"
         >
-          <ImageIcon class="h-4 w-4" />
+          <ImageIcon class="h-3.5 w-3.5" />
+          <span class="hidden sm:inline">Attach image</span>
         </button>
-        <span class="hidden font-mono text-[10px] uppercase tracking-widest text-txtmuted sm:inline">
-          Enter to send · Shift+Enter for newline
-        </span>
-        {#if contextTotal > 0}
-          <span
-            class="ml-2 hidden rounded-sm border border-border bg-black px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-txtsecondary md:inline"
-            title={liveStatsText || `${contextUsed.toLocaleString()} used / ${contextTotal.toLocaleString()} total (${contextPercent}%)`}
+
+        {#if isStreaming}
+          <button
+            class="flex items-center gap-1.5 rounded-sm border border-red-600 bg-red-600 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-white transition-colors hover:border-red-500 hover:bg-red-500"
+            onclick={cancelStreaming}
           >
-            {#if liveStatsText}
-              {liveStatsText}
-            {:else}
-              CTX {formatTokenCount(contextAvailable)} left
-            {/if}
-          </span>
+            <Square class="h-3 w-3" fill="currentColor" />
+            Stop
+          </button>
+        {:else if isCompacting}
+          <button
+            class="flex items-center gap-1.5 rounded-sm border border-border bg-zinc-950 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-txtsecondary"
+            disabled
+          >
+            <Archive class="h-3 w-3" />
+            Compacting
+          </button>
         {/if}
       </div>
-
-      {#if isStreaming}
-        <button class="btn btn-danger flex items-center gap-2" onclick={cancelStreaming}>
-          <Square class="h-3.5 w-3.5" />
-          Stop
-        </button>
-      {:else if isCompacting}
-        <button class="btn flex items-center gap-2" disabled>
-          <Archive class="h-3.5 w-3.5" />
-          Compacting
-        </button>
-      {:else}
-        <button
-          class="btn btn-primary flex items-center gap-2"
-          onclick={sendMessage}
-          disabled={!$chatsReady || isCompacting || (!userInput.trim() && attachedImages.length === 0) || !$selectedModelStore}
-        >
-          <Send class="h-3.5 w-3.5" />
-          Send
-        </button>
-      {/if}
     </div>
   </div>
 {/snippet}

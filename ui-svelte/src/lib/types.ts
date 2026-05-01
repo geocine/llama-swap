@@ -46,7 +46,7 @@ export interface InFlightStats {
 }
 
 export interface APIEventEnvelope {
-  type: "modelStatus" | "logData" | "metrics" | "inflight";
+  type: "modelStatus" | "logData" | "metrics" | "inflight" | "activity";
   data: string;
 }
 
@@ -110,13 +110,19 @@ export function getTextContent(content: string | ContentPart[]): string {
   return textParts.map((part) => part.text).join("\n");
 }
 
+function isDisplayableImageUrl(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed.startsWith("data:image/") || trimmed.startsWith("blob:") || trimmed.startsWith("http://") || trimmed.startsWith("https://");
+}
+
 export function getImageUrls(content: string | ContentPart[]): string[] {
   if (typeof content === "string") {
     return [];
   }
   return content
     .filter((part): part is ImageContentPart => part.type === "image_url")
-    .map((part) => part.image_url.url);
+    .map((part) => part.image_url.url)
+    .filter(isDisplayableImageUrl);
 }
 
 export interface ChatCompletionRequest {

@@ -13,18 +13,44 @@ const CONVERSATIONS_KEY = "playground-conversations";
 const CURRENT_KEY = "playground-current-conversation";
 const LEGACY_MESSAGES_KEY = "playground-messages";
 const DB_NAME = "llama-swap-playground";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const CONVERSATION_STORE = "conversations";
+const IMAGE_STORE = "images";
 const PERSIST_THROTTLE_MS = 2000;
 const MAX_CONVERSATIONS = 25;
 const MAX_STORED_CONVERSATIONS_CHARS = 1_000_000;
 const MAX_MESSAGES_PER_CONVERSATION = 40;
 const MAX_PERSISTED_TEXT_CHARS = 30_000;
 const MAX_RENDERED_TEXT_CHARS = 120_000;
-const MAX_PERSISTED_IMAGE_URL_CHARS = 20_000;
+const STORED_IMAGE_PREFIX = "indexeddb://image/";
+
+interface StoredImage {
+  id: string;
+  blob: Blob;
+  type: string;
+  createdAt: number;
+}
+
+const imageRefByDataUrl = new Map<string, string>();
+const dataUrlByImageRef = new Map<string, string>();
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+}
+
+function generateImageId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return generateId();
+}
+
+function imageRef(id: string): string {
+  return `${STORED_IMAGE_PREFIX}${id}`;
+}
+
+function imageIdFromRef(url: string): string | null {
+  return url.startsWith(STORED_IMAGE_PREFIX) ? url.slice(STORED_IMAGE_PREFIX.length) : null;
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -38,6 +64,9 @@ function openChatDB(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(CONVERSATION_STORE)) {
         db.createObjectStore(CONVERSATION_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(IMAGE_STORE)) {
+        db.createObjectStore(IMAGE_STORE, { keyPath: "id" });
       }
     };
 
@@ -71,25 +100,31 @@ async function loadConversationsFromDB(): Promise<Conversation[]> {
   const conversations = await requestResult<Conversation[]>(store.getAll());
   await txDone(tx);
 
-  return trimConversationsForRender(
-    conversations
-      .filter((conversation) => conversation && typeof conversation.id === "string")
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, MAX_CONVERSATIONS)
+  return hydrateConversationImages(
+    trimConversationsForRender(
+      conversations
+        .filter((conversation) => conversation && typeof conversation.id === "string")
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, MAX_CONVERSATIONS)
+    )
   );
 }
 
 async function saveConversationsToDB(conversations: Conversation[]): Promise<void> {
   if (typeof indexedDB === "undefined") return;
 
+  const trimmed = await trimConversationsForStorage(conversations);
   const db = await openChatDB();
   const tx = db.transaction(CONVERSATION_STORE, "readwrite");
   const store = tx.objectStore(CONVERSATION_STORE);
   store.clear();
-  for (const conversation of trimConversationsForStorage(conversations)) {
+  for (const conversation of trimmed) {
     store.put(conversation);
   }
   await txDone(tx);
+  void cleanupUnreferencedImages(trimmed).catch((e) => {
+    console.error("Failed to clean up persisted chat images", e);
+  });
 }
 
 // Title heuristic — first user message text, single line, capped to ~60 chars
@@ -118,22 +153,109 @@ function truncateForRender(value: string): string {
   return `${value.slice(0, MAX_RENDERED_TEXT_CHARS)}\n\n[message truncated for browser rendering]`;
 }
 
-function trimMessage(message: ChatMessage, textLimit: "storage" | "render"): ChatMessage {
-  const truncate = textLimit === "storage" ? truncateText : truncateForRender;
-  const reasoning_content = message.reasoning_content ? truncate(message.reasoning_content) : message.reasoning_content;
+async function dataUrlToBlob(url: string): Promise<Blob> {
+  const response = await fetch(url);
+  return response.blob();
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("Failed to read persisted image"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function storeImageDataUrl(url: string): Promise<string> {
+  const cachedRef = imageRefByDataUrl.get(url);
+  if (cachedRef) return cachedRef;
+
+  const blob = await dataUrlToBlob(url);
+  const id = generateImageId();
+  const ref = imageRef(id);
+  const db = await openChatDB();
+  const tx = db.transaction(IMAGE_STORE, "readwrite");
+  const store = tx.objectStore(IMAGE_STORE);
+  const image: StoredImage = {
+    id,
+    blob,
+    type: blob.type,
+    createdAt: Date.now(),
+  };
+  store.put(image);
+  await txDone(tx);
+  imageRefByDataUrl.set(url, ref);
+  dataUrlByImageRef.set(ref, url);
+  return ref;
+}
+
+async function loadStoredImageUrl(id: string): Promise<string | null> {
+  const ref = imageRef(id);
+  const cachedUrl = dataUrlByImageRef.get(ref);
+  if (cachedUrl) return cachedUrl;
+
+  const db = await openChatDB();
+  const tx = db.transaction(IMAGE_STORE, "readonly");
+  const store = tx.objectStore(IMAGE_STORE);
+  const image = await requestResult<StoredImage | undefined>(store.get(id));
+  await txDone(tx);
+  if (!image?.blob) return null;
+  const url = await blobToDataUrl(image.blob);
+  imageRefByDataUrl.set(url, ref);
+  dataUrlByImageRef.set(ref, url);
+  return url;
+}
+
+async function trimMessageForStorage(message: ChatMessage): Promise<ChatMessage> {
+  const reasoning_content = message.reasoning_content ? truncateText(message.reasoning_content) : message.reasoning_content;
 
   if (typeof message.content === "string") {
-    return { ...message, content: truncate(message.content), reasoning_content };
+    return { ...message, content: truncateText(message.content), reasoning_content };
+  }
+
+  const content = await Promise.all(
+    message.content.map(async (part) => {
+      if (part.type === "text") {
+        return { ...part, text: truncateText(part.text) };
+      }
+      if (imageIdFromRef(part.image_url.url)) {
+        return part;
+      }
+      if (part.image_url.url.startsWith("data:image/")) {
+        try {
+          const url = await storeImageDataUrl(part.image_url.url);
+          return { ...part, image_url: { url } };
+        } catch (e) {
+          console.error("Failed to persist chat image", e);
+          return { ...part, image_url: { url: "" } };
+        }
+      }
+      return part;
+    })
+  );
+
+  return {
+    ...message,
+    content,
+    reasoning_content,
+  };
+}
+
+function trimMessageForRender(message: ChatMessage): ChatMessage {
+  const reasoning_content = message.reasoning_content
+    ? truncateForRender(message.reasoning_content)
+    : message.reasoning_content;
+
+  if (typeof message.content === "string") {
+    return { ...message, content: truncateForRender(message.content), reasoning_content };
   }
 
   return {
     ...message,
     content: message.content.map((part) => {
       if (part.type === "text") {
-        return { ...part, text: truncate(part.text) };
-      }
-      if (part.image_url.url.length > MAX_PERSISTED_IMAGE_URL_CHARS) {
-        return { ...part, image_url: { url: "" } };
+        return { ...part, text: truncateForRender(part.text) };
       }
       return part;
     }),
@@ -141,22 +263,84 @@ function trimMessage(message: ChatMessage, textLimit: "storage" | "render"): Cha
   };
 }
 
-function trimConversationsForStorage(conversations: Conversation[]): Conversation[] {
-  return conversations
+async function trimConversationsForStorage(conversations: Conversation[]): Promise<Conversation[]> {
+  const trimmed = conversations
     .slice()
     .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_CONVERSATIONS)
-    .map((conversation) => ({
+    .slice(0, MAX_CONVERSATIONS);
+
+  return Promise.all(
+    trimmed.map(async (conversation) => ({
       ...conversation,
-      messages: conversation.messages.slice(-MAX_MESSAGES_PER_CONVERSATION).map((message) => trimMessage(message, "storage")),
-    }));
+      messages: await Promise.all(
+        conversation.messages.slice(-MAX_MESSAGES_PER_CONVERSATION).map((message) => trimMessageForStorage(message))
+      ),
+    }))
+  );
 }
 
 function trimConversationsForRender(conversations: Conversation[]): Conversation[] {
   return conversations.map((conversation) => ({
     ...conversation,
-    messages: conversation.messages.map((message) => trimMessage(message, "render")),
+    messages: conversation.messages.map(trimMessageForRender),
   }));
+}
+
+async function hydrateConversationImages(conversations: Conversation[]): Promise<Conversation[]> {
+  return Promise.all(
+    conversations.map(async (conversation) => ({
+      ...conversation,
+      messages: await Promise.all(
+        conversation.messages.map(async (message) => {
+          if (typeof message.content === "string") return message;
+          const content = await Promise.all(
+            message.content.map(async (part) => {
+              if (part.type !== "image_url") return part;
+              const id = imageIdFromRef(part.image_url.url);
+              if (!id) return part;
+              const url = await loadStoredImageUrl(id);
+              return { ...part, image_url: { url: url ?? "" } };
+            })
+          );
+          return { ...message, content };
+        })
+      ),
+    }))
+  );
+}
+
+function collectImageRefs(conversations: Conversation[]): Set<string> {
+  const refs = new Set<string>();
+  for (const conversation of conversations) {
+    for (const message of conversation.messages) {
+      if (typeof message.content === "string") continue;
+      for (const part of message.content) {
+        if (part.type !== "image_url") continue;
+        const id = imageIdFromRef(part.image_url.url);
+        if (id) refs.add(id);
+      }
+    }
+  }
+  return refs;
+}
+
+async function cleanupUnreferencedImages(conversations: Conversation[]): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  const refs = collectImageRefs(conversations);
+  const db = await openChatDB();
+  const tx = db.transaction(IMAGE_STORE, "readwrite");
+  const store = tx.objectStore(IMAGE_STORE);
+  const keys = await requestResult<IDBValidKey[]>(store.getAllKeys());
+  for (const key of keys) {
+    if (typeof key === "string" && !refs.has(key)) {
+      const ref = imageRef(key);
+      const url = dataUrlByImageRef.get(ref);
+      if (url) imageRefByDataUrl.delete(url);
+      dataUrlByImageRef.delete(ref);
+      store.delete(key);
+    }
+  }
+  await txDone(tx);
 }
 
 async function migrateLocalStorageConversations(): Promise<Conversation[] | null> {

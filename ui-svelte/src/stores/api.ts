@@ -100,6 +100,10 @@ export function enableAPIEvents(enabled: boolean): void {
             inFlightRequests.set(stats.total ?? 0);
             break;
           }
+          case "activity": {
+            metrics.set([]);
+            break;
+          }
         }
       } catch (err) {
         console.error(e.data, err);
@@ -203,5 +207,39 @@ export async function getCapture(id: number): Promise<ReqRespCapture | null> {
   } catch (error) {
     console.error("Failed to fetch capture:", error);
     return null;
+  }
+}
+
+export async function downloadActivityDB(): Promise<void> {
+  try {
+    const response = await apiFetch("/api/metrics/export");
+    if (!response.ok) {
+      throw new Error(`Failed to export activity database: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "llama-swap-activity.sqlite";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error("Failed to export activity database:", error);
+    throw error;
+  }
+}
+
+export async function clearActivity(): Promise<void> {
+  try {
+    const response = await apiFetch("/api/metrics", { method: "DELETE" });
+    if (!response.ok) {
+      throw new Error(`Failed to clear activity: ${response.status}`);
+    }
+    metrics.set([]);
+  } catch (error) {
+    console.error("Failed to clear activity:", error);
+    throw error;
   }
 }

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -958,34 +960,117 @@ func TestMetricsMonitor_AddCapture(t *testing.T) {
 		assert.Equal(t, []byte("test response"), retrieved.RespBody)
 	})
 
-	t.Run("evicts oldest when exceeding max size", func(t *testing.T) {
+	t.Run("keeps captures in sqlite without memory eviction", func(t *testing.T) {
 		mm := newMetricsMonitor(testLogger, 10, 5)
-		mm.maxCaptureSize = 100 // Set small limit for test
+
+		id0 := mm.addMetrics(TokenMetrics{HasCapture: true})
+		id1 := mm.addMetrics(TokenMetrics{HasCapture: true})
+		id2 := mm.addMetrics(TokenMetrics{HasCapture: true})
 
 		// Add captures that will exceed the limit
-		capture1 := ReqRespCapture{ID: 0, ReqBody: make([]byte, 40)}
-		capture2 := ReqRespCapture{ID: 1, ReqBody: make([]byte, 40)}
-		capture3 := ReqRespCapture{ID: 2, ReqBody: make([]byte, 40)}
+		capture1 := ReqRespCapture{ID: id0, ReqBody: make([]byte, 40)}
+		capture2 := ReqRespCapture{ID: id1, ReqBody: make([]byte, 40)}
+		capture3 := ReqRespCapture{ID: id2, ReqBody: make([]byte, 40)}
 
 		mm.addCapture(capture1)
 		mm.addCapture(capture2)
-		// Adding capture3 should evict capture1
 		mm.addCapture(capture3)
 
-		assert.Nil(t, mm.getCaptureByID(0), "capture 0 should be evicted")
-		assert.NotNil(t, mm.getCaptureByID(1), "capture 1 should exist")
-		assert.NotNil(t, mm.getCaptureByID(2), "capture 2 should exist")
+		assert.NotNil(t, mm.getCaptureByID(id0), "capture 0 should exist")
+		assert.NotNil(t, mm.getCaptureByID(id1), "capture 1 should exist")
+		assert.NotNil(t, mm.getCaptureByID(id2), "capture 2 should exist")
+
+		metrics := mm.getMetrics()
+		assert.True(t, metrics[0].HasCapture, "stored capture should be advertised")
+		assert.True(t, metrics[1].HasCapture, "stored capture should be advertised")
+		assert.True(t, metrics[2].HasCapture, "stored capture should be advertised")
 	})
 
-	t.Run("skips capture larger than max size", func(t *testing.T) {
+	t.Run("stores capture larger than legacy memory buffer", func(t *testing.T) {
 		mm := newMetricsMonitor(testLogger, 10, 5)
-		mm.maxCaptureSize = 100
 
-		// Add a capture larger than max
+		id := mm.addMetrics(TokenMetrics{HasCapture: true})
 		largeCapture := ReqRespCapture{ID: 0, ReqBody: make([]byte, 200)}
+		largeCapture.ID = id
 		mm.addCapture(largeCapture)
 
-		assert.Nil(t, mm.getCaptureByID(0), "oversized capture should not be stored")
+		assert.NotNil(t, mm.getCaptureByID(id), "large capture should be stored in sqlite")
+	})
+
+	t.Run("encrypts captures with configured key", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "captures.sqlite")
+		mm := newMetricsMonitor(testLogger, 10, 5, dbPath, "replace-me")
+
+		id := mm.addMetrics(TokenMetrics{HasCapture: true})
+		capture := ReqRespCapture{
+			ID:          id,
+			ReqPath:     "/v1/chat/completions",
+			ReqHeaders:  map[string]string{"Authorization": "Bearer secret"},
+			ReqBody:     []byte("secret request"),
+			RespHeaders: map[string]string{"Content-Type": "application/json"},
+			RespBody:    []byte("secret response"),
+		}
+		mm.addCapture(capture)
+
+		retrieved := mm.getCaptureByID(id)
+		assert.NotNil(t, retrieved)
+		assert.Equal(t, capture.ReqPath, retrieved.ReqPath)
+		assert.Equal(t, capture.ReqBody, retrieved.ReqBody)
+		assert.Equal(t, capture.RespBody, retrieved.RespBody)
+
+		assert.NoError(t, mm.close())
+		db, err := sql.Open("sqlite", dbPath)
+		assert.NoError(t, err)
+
+		var encrypted int
+		var rawReqBody []byte
+		var rawRespBody []byte
+		err = db.QueryRow(`SELECT encrypted, req_body, resp_body FROM captures WHERE id = ?`, id).Scan(&encrypted, &rawReqBody, &rawRespBody)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, encrypted)
+		assert.NotEqual(t, capture.ReqBody, rawReqBody)
+		assert.NotEqual(t, capture.RespBody, rawRespBody)
+		assert.NoError(t, db.Close())
+
+		wrongKey := newMetricsMonitor(testLogger, 10, 5, dbPath, "wrong")
+		_, err = wrongKey.getStoredCaptureByID(id)
+		assert.Error(t, err)
+		assert.NoError(t, wrongKey.close())
+
+		rightKey := newMetricsMonitor(testLogger, 10, 5, dbPath, "replace-me")
+		defer rightKey.close()
+		retrieved = rightKey.getCaptureByID(id)
+		assert.NotNil(t, retrieved)
+		assert.Equal(t, capture.ReqBody, retrieved.ReqBody)
+
+		exportPath := filepath.Join(t.TempDir(), "activity-export.sqlite")
+		assert.NoError(t, rightKey.exportActivityDB(exportPath))
+		exportDB, err := sql.Open("sqlite", exportPath)
+		assert.NoError(t, err)
+		defer exportDB.Close()
+
+		var exportedEncrypted int
+		var exportedReqBody []byte
+		var exportedRespBody []byte
+		err = exportDB.QueryRow(`SELECT encrypted, req_body, resp_body FROM captures WHERE id = ?`, id).Scan(&exportedEncrypted, &exportedReqBody, &exportedRespBody)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, exportedEncrypted)
+		assert.Equal(t, capture.ReqBody, exportedReqBody)
+		assert.Equal(t, capture.RespBody, exportedRespBody)
+	})
+
+	t.Run("clear activity removes metrics and sqlite captures", func(t *testing.T) {
+		mm := newMetricsMonitor(testLogger, 10, 5)
+
+		id := mm.addMetrics(TokenMetrics{HasCapture: true})
+		mm.addCapture(ReqRespCapture{ID: id, ReqBody: []byte("test")})
+
+		assert.Len(t, mm.getMetrics(), 1)
+		assert.NotNil(t, mm.getCaptureByID(id))
+
+		assert.NoError(t, mm.clearActivity())
+		assert.Empty(t, mm.getMetrics())
+		assert.Nil(t, mm.getCaptureByID(id))
 	})
 }
 

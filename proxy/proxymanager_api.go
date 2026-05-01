@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,8 @@ func addApiHandlers(pm *ProxyManager) {
 		apiGroup.POST("/models/unload/*model", pm.apiUnloadSingleModelHandler)
 		apiGroup.GET("/events", pm.apiSendEvents)
 		apiGroup.GET("/metrics", pm.apiGetMetrics)
+		apiGroup.DELETE("/metrics", pm.apiClearActivity)
+		apiGroup.GET("/metrics/export", pm.apiExportActivityDB)
 		apiGroup.GET("/version", pm.apiGetVersion)
 		apiGroup.GET("/captures/:id", pm.apiGetCapture)
 	}
@@ -179,6 +182,7 @@ const (
 	msgTypeLogData     messageType = "logData"
 	msgTypeMetrics     messageType = "metrics"
 	msgTypeInFlight    messageType = "inflight"
+	msgTypeActivity    messageType = "activity"
 )
 
 type messageEnvelope struct {
@@ -250,6 +254,18 @@ func (pm *ProxyManager) apiSendEvents(c *gin.Context) {
 		}
 	}
 
+	sendActivityCleared := func() {
+		jsonData, err := json.Marshal(gin.H{"cleared": true})
+		if err == nil {
+			select {
+			case sendBuffer <- messageEnvelope{Type: msgTypeActivity, Data: string(jsonData)}:
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
+	}
+
 	/**
 	 * Send updated models list
 	 */
@@ -275,6 +291,9 @@ func (pm *ProxyManager) apiSendEvents(c *gin.Context) {
 	 */
 	defer event.On(func(e TokenMetricsEvent) {
 		sendMetrics([]TokenMetrics{e.Metrics})
+	})()
+	defer event.On(func(e ActivityClearedEvent) {
+		sendActivityCleared()
 	})()
 
 	/**
@@ -313,6 +332,37 @@ func (pm *ProxyManager) apiGetMetrics(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, "application/json", jsonData)
+}
+
+func (pm *ProxyManager) apiClearActivity(c *gin.Context) {
+	if err := pm.metricsMonitor.clearActivity(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to clear activity"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"msg": "ok"})
+}
+
+func (pm *ProxyManager) apiExportActivityDB(c *gin.Context) {
+	file, err := os.CreateTemp("", "llama-swap-activity-*.sqlite")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create export file"})
+		return
+	}
+	exportPath := file.Name()
+	if err := file.Close(); err != nil {
+		os.Remove(exportPath)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create export file"})
+		return
+	}
+	defer os.Remove(exportPath)
+
+	if err := pm.metricsMonitor.exportActivityDB(exportPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to export activity database"})
+		return
+	}
+
+	c.Header("Cache-Control", "no-store")
+	c.FileAttachment(exportPath, "llama-swap-activity.sqlite")
 }
 
 func (pm *ProxyManager) apiUnloadSingleModelHandler(c *gin.Context) {

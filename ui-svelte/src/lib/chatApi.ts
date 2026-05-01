@@ -35,6 +35,29 @@ interface ChatCompletionResponse {
   }>;
 }
 
+function isRequestImageUrl(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed.startsWith("data:image/") || trimmed.startsWith("http://") || trimmed.startsWith("https://");
+}
+
+function sanitizeMessageForRequest(message: ChatMessage): ChatMessage {
+  if (typeof message.content === "string") return message;
+
+  const content = message.content.filter((part) => {
+    if (part.type === "text") return part.text.length > 0;
+    return isRequestImageUrl(part.image_url.url);
+  });
+
+  return {
+    ...message,
+    content: content.length > 0 ? content : "",
+  };
+}
+
+function sanitizeMessagesForRequest(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map(sanitizeMessageForRequest);
+}
+
 function parseSSELine(line: string): StreamChunk | null {
   const trimmed = line.trim();
   if (!trimmed || !trimmed.startsWith("data: ")) {
@@ -72,7 +95,7 @@ export async function* streamChatCompletion(
 ): AsyncGenerator<StreamChunk> {
   const request: ChatCompletionRequest = {
     model,
-    messages,
+    messages: sanitizeMessagesForRequest(messages),
     stream: true,
     temperature: options?.temperature,
     max_tokens: options?.max_tokens,
@@ -146,7 +169,7 @@ export async function completeChatCompletion(
 ): Promise<string> {
   const request: ChatCompletionRequest = {
     model,
-    messages,
+    messages: sanitizeMessagesForRequest(messages),
     stream: false,
     temperature: options?.temperature,
     max_tokens: options?.max_tokens,

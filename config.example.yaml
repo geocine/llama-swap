@@ -50,10 +50,16 @@ logToStdout: "proxy"
 # - useful for limiting memory usage when processing large volumes of metrics
 metricsMaxInMemory: 1000
 
-# captureBuffer: how many MBs to allocate for storing request/response captures
-# - optional, default: 10
-# - set to 0 to disable
+# captureBuffer: legacy switch for request/response captures
+# - optional, default: 5
+# - captures are stored in SQLite; set to 0 to disable
 captureBuffer: 15
+
+# captureDBPath: path to the SQLite database used for request/response captures
+# - optional, default: $LLAMA_CACHE/llama-swap-captures.sqlite when LLAMA_CACHE is set,
+#   otherwise the OS user cache directory
+# - if apiKeys is configured, capture payloads are encrypted with the first key
+captureDBPath: llama-swap-captures.sqlite
 
 # startPort: sets the starting port number for the automatic ${PORT} macro.
 # - optional, default: 5800
