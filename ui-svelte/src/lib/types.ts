@@ -56,6 +56,11 @@ export interface VersionInfo {
   version: string;
 }
 
+export interface ServerInfo {
+  authRequired: boolean;
+  apiKey?: string;
+}
+
 export interface ModelDownloadProgress {
   active: boolean;
   filename?: string;

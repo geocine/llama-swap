@@ -8,6 +8,7 @@
     newConversation,
   } from "../../stores/chats";
   import { sidebarOpen } from "../../stores/playgroundUI";
+  import { confirmDialog } from "../../stores/confirm";
   import { Plus, Trash2, Check, X, Pencil, PanelLeftClose } from "lucide-svelte";
 
   // Newest conversations first — copy before sorting since the source is reactive
@@ -49,8 +50,16 @@
     }
   }
 
-  function confirmDelete(id: string, title: string) {
-    if (confirm(`Delete "${title}"?`)) {
+  async function confirmDelete(id: string, title: string) {
+    const label = title?.trim() ? title : "this conversation";
+    const ok = await confirmDialog({
+      title: "Delete conversation",
+      message: `Delete "${label}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (ok) {
       deleteConversation(id);
     }
   }

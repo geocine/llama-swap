@@ -82,9 +82,8 @@
 
 <div class="card h-full flex flex-col">
   <div class="shrink-0">
-    <div class="flex justify-between items-baseline">
-      <h2 class={$isNarrow ? "text-base" : ""}>Models</h2>
-      {#if $isNarrow}
+    {#if $isNarrow}
+      <div class="flex justify-end items-baseline">
         <div class="relative">
           <button class="btn flex items-center gap-2 py-1" onclick={() => (menuOpen = !menuOpen)} aria-label="Toggle menu">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
@@ -133,8 +132,8 @@
             </div>
           {/if}
         </div>
-      {/if}
-    </div>
+      </div>
+    {/if}
     {#if !$isNarrow}
       <div class="flex justify-between">
         <div class="flex gap-2">

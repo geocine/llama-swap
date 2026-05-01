@@ -45,8 +45,29 @@ func addApiHandlers(pm *ProxyManager) {
 		apiGroup.DELETE("/metrics", pm.apiClearActivity)
 		apiGroup.GET("/metrics/export", pm.apiExportActivityDB)
 		apiGroup.GET("/version", pm.apiGetVersion)
+		apiGroup.GET("/info", pm.apiGetInfo)
 		apiGroup.GET("/captures/:id", pm.apiGetCapture)
 	}
+}
+
+// ServerInfo describes connection details a UI client needs to call the
+// OpenAI-compatible API from external tools. Only returned to authenticated
+// callers (route is registered under apiGroup), so emitting the first
+// configured API key is no different from what the user already supplied at
+// login or holds in their config file.
+type ServerInfo struct {
+	AuthRequired bool   `json:"authRequired"`
+	APIKey       string `json:"apiKey,omitempty"`
+}
+
+func (pm *ProxyManager) apiGetInfo(c *gin.Context) {
+	info := ServerInfo{
+		AuthRequired: pm.authRequired(),
+	}
+	if info.AuthRequired && len(pm.config.RequiredAPIKeys) > 0 {
+		info.APIKey = pm.config.RequiredAPIKeys[0]
+	}
+	c.JSON(http.StatusOK, info)
 }
 
 func (pm *ProxyManager) apiUnloadAllModels(c *gin.Context) {

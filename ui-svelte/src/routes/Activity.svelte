@@ -1,5 +1,6 @@
 <script lang="ts">
   import { metrics, getCapture, downloadActivityDB, clearActivity } from "../stores/api";
+  import { confirmDialog } from "../stores/confirm";
   import Tooltip from "../components/Tooltip.svelte";
   import CaptureDialog from "../components/CaptureDialog.svelte";
   import type { ReqRespCapture } from "../lib/types";
@@ -75,7 +76,14 @@
   }
 
   async function clearAllActivity() {
-    if (!window.confirm("Clear activity and captures?")) {
+    const ok = await confirmDialog({
+      title: "Clear activity",
+      message: "Clear all activity metrics and captures? This cannot be undone.",
+      confirmLabel: "Clear",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!ok) {
       return;
     }
     clearingActivity = true;

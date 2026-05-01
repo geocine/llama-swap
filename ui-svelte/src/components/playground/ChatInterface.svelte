@@ -43,7 +43,6 @@
 
   const selectedModelStore = persistentStore<string>("playground-selected-model", "");
   const systemPromptStore = persistentStore<string>("playground-system-prompt", "");
-  const temperatureStore = persistentStore<number>("playground-temperature", 0.7);
 
   // Ensure there is always an active conversation as soon as this component mounts
   $effect(() => {
@@ -362,7 +361,6 @@
         $selectedModelStore,
         apiMessages,
         abortController.signal,
-        { temperature: $temperatureStore }
       );
 
       for await (const chunk of stream) {
@@ -664,7 +662,7 @@
   <!-- Settings drawer -->
   {#if showSettings}
     <div class="mx-auto mb-3 w-full max-w-[64rem] shrink-0 rounded-sm border border-border bg-surface p-4">
-      <div class="mb-4">
+      <div>
         <label
           class="mb-2 block text-[10px] font-bold uppercase tracking-widest text-txtsecondary"
           for="system-prompt"
@@ -679,31 +677,6 @@
           bind:value={$systemPromptStore}
           disabled={isStreaming}
         ></textarea>
-      </div>
-      <div>
-        <label
-          class="mb-2 block text-[10px] font-bold uppercase tracking-widest text-txtsecondary"
-          for="temperature"
-        >
-          Temperature
-          <span class="ml-2 font-mono normal-case tracking-normal text-txtmain">
-            {$temperatureStore.toFixed(2)}
-          </span>
-        </label>
-        <input
-          id="temperature"
-          type="range"
-          min="0"
-          max="2"
-          step="0.05"
-          class="w-full accent-white"
-          bind:value={$temperatureStore}
-          disabled={isStreaming}
-        />
-        <div class="mt-1 flex justify-between font-mono text-[10px] uppercase tracking-widest text-txtsecondary">
-          <span>Precise · 0</span>
-          <span>Creative · 2</span>
-        </div>
       </div>
     </div>
   {/if}

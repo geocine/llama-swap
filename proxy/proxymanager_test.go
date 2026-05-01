@@ -1342,6 +1342,79 @@ func TestProxyManager_ApiGetVersion(t *testing.T) {
 	}
 }
 
+func TestProxyManager_ApiGetInfo(t *testing.T) {
+	t.Run("returns auth required and api key when configured", func(t *testing.T) {
+		testConfig := config.AddDefaultGroupToConfig(config.Config{
+			HealthCheckTimeout: 15,
+			Models: map[string]config.ModelConfig{
+				"model1": getTestSimpleResponderConfig("model1"),
+			},
+			RequiredAPIKeys: []string{"primary-key", "secondary-key"},
+			LogLevel:        "error",
+		})
+
+		proxy := New(testConfig)
+		defer proxy.StopProcesses(StopWaitForInflightRequest)
+
+		req := httptest.NewRequest("GET", "/api/info", nil)
+		req.Header.Set("Authorization", "Bearer primary-key")
+		w := CreateTestResponseRecorder()
+		proxy.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+
+		var response ServerInfo
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.True(t, response.AuthRequired)
+		assert.Equal(t, "primary-key", response.APIKey, "first configured key should be returned")
+	})
+
+	t.Run("returns no api key when auth is not required", func(t *testing.T) {
+		testConfig := config.AddDefaultGroupToConfig(config.Config{
+			HealthCheckTimeout: 15,
+			Models: map[string]config.ModelConfig{
+				"model1": getTestSimpleResponderConfig("model1"),
+			},
+			LogLevel: "error",
+		})
+
+		proxy := New(testConfig)
+		defer proxy.StopProcesses(StopWaitForInflightRequest)
+
+		req := httptest.NewRequest("GET", "/api/info", nil)
+		w := CreateTestResponseRecorder()
+		proxy.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response ServerInfo
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.False(t, response.AuthRequired)
+		assert.Empty(t, response.APIKey)
+	})
+
+	t.Run("requires authentication when api keys configured", func(t *testing.T) {
+		testConfig := config.AddDefaultGroupToConfig(config.Config{
+			HealthCheckTimeout: 15,
+			Models: map[string]config.ModelConfig{
+				"model1": getTestSimpleResponderConfig("model1"),
+			},
+			RequiredAPIKeys: []string{"primary-key"},
+			LogLevel:        "error",
+		})
+
+		proxy := New(testConfig)
+		defer proxy.StopProcesses(StopWaitForInflightRequest)
+
+		req := httptest.NewRequest("GET", "/api/info", nil)
+		w := CreateTestResponseRecorder()
+		proxy.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+}
+
 func TestProxyManager_APIKeyAuth(t *testing.T) {
 	testConfig := config.AddDefaultGroupToConfig(config.Config{
 		HealthCheckTimeout: 15,

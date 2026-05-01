@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Router from "svelte-spa-router";
+  import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Header from "./components/Header.svelte";
   import LoginForm from "./components/LoginForm.svelte";
   import LogViewer from "./routes/LogViewer.svelte";
@@ -76,3 +77,5 @@
 {:else}
   <LoginForm />
 {/if}
+
+<ConfirmDialog />

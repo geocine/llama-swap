@@ -3,6 +3,7 @@ import type {
   Model,
   Metrics,
   VersionInfo,
+  ServerInfo,
   LogData,
   APIEventEnvelope,
   ReqRespCapture,
@@ -26,6 +27,7 @@ export const versionInfo = writable<VersionInfo>({
   commit: "unknown",
   version: "unknown",
 });
+export const serverInfo = writable<ServerInfo | null>(null);
 
 let apiEventSource: EventSource | null = null;
 
@@ -193,7 +195,7 @@ export function enableAPIEvents(enabled: boolean): void {
   connect();
 }
 
-// Fetch version info when connected
+// Fetch version + server info when connected
 connectionState.subscribe(async (status) => {
   if (status === "connected") {
     try {
@@ -206,8 +208,24 @@ connectionState.subscribe(async (status) => {
     } catch (error) {
       console.error(error);
     }
+    void fetchServerInfo();
   }
 });
+
+export async function fetchServerInfo(): Promise<ServerInfo | null> {
+  try {
+    const response = await apiFetch("/api/info");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data: ServerInfo = await response.json();
+    serverInfo.set(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch server info:", error);
+    return null;
+  }
+}
 
 export async function listModels(): Promise<Model[]> {
   try {
