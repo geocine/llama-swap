@@ -1,12 +1,27 @@
 package config
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestConfig_LoadQuickpodConfig(t *testing.T) {
+	t.Setenv("LS_KEY", "test-key")
+
+	file, err := os.Open("../../quickpod.config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	if _, err := LoadConfigFromReader(file); err != nil {
+		t.Fatalf("failed to load quickpod.config.yaml: %v", err)
+	}
+}
 
 func TestConfig_GroupMemberIsUnique(t *testing.T) {
 	content := `

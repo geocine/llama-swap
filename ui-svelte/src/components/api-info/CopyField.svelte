@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, Copy, Eye, EyeOff } from "lucide-svelte";
+  import type { Snippet } from "svelte";
 
   type Props = {
     label: string;
@@ -10,6 +11,8 @@
     secret?: boolean;
     placeholder?: string;
     monospace?: boolean;
+    /** Optional inline controls rendered on the right side of the label row. */
+    headerActions?: Snippet;
   };
 
   let {
@@ -19,6 +22,7 @@
     secret = false,
     placeholder,
     monospace = true,
+    headerActions,
   }: Props = $props();
 
   let revealed = $state(false);
@@ -52,9 +56,16 @@
 </script>
 
 <div class="flex flex-col gap-1.5">
-  <span class="font-mono text-[10px] font-bold uppercase tracking-widest text-txtsecondary">
-    {label}
-  </span>
+  {#if label || headerActions}
+    <div class="flex min-h-[22px] items-center justify-between gap-2">
+      <span class="font-mono text-[10px] font-bold uppercase tracking-widest text-txtsecondary">
+        {label}
+      </span>
+      {#if headerActions}
+        {@render headerActions()}
+      {/if}
+    </div>
+  {/if}
   <div
     class="flex items-stretch overflow-hidden rounded-[2px] border border-border bg-black transition-colors duration-150 focus-within:border-border-hover hover:border-border-hover"
   >
@@ -68,7 +79,7 @@
     </div>
     {#if secret && value}
       <button
-        class="flex w-9 shrink-0 items-center justify-center border-l border-border text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white"
+        class="flex w-9 shrink-0 cursor-pointer items-center justify-center border-l border-border text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white"
         onclick={() => (revealed = !revealed)}
         title={revealed ? "Hide" : "Reveal"}
         aria-label={revealed ? "Hide value" : "Reveal value"}
@@ -81,7 +92,7 @@
       </button>
     {/if}
     <button
-      class="flex w-9 shrink-0 items-center justify-center border-l border-border text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+      class="flex w-9 shrink-0 cursor-pointer items-center justify-center border-l border-border text-txtsecondary transition-colors duration-150 hover:bg-secondary hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
       onclick={copy}
       disabled={!value}
       title={copied ? "Copied" : "Copy"}

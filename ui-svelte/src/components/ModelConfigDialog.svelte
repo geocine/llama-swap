@@ -3,12 +3,14 @@
     deleteModelEntry,
     duplicateModelConfig,
     listModelConfigSettings,
+    loadModel,
     resetModelConfigSettings,
     saveModelConfigSettings,
+    unloadSingleModel,
   } from "../stores/api";
   import { confirmDialog } from "../stores/confirm";
-  import type { EditableModelConfig, SessionModelSettings } from "../lib/types";
-  import { Copy, RotateCcw, Save, Trash2, X } from "lucide-svelte";
+  import type { EditableModelConfig, ModelStatus, SessionModelSettings } from "../lib/types";
+  import { Copy, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-svelte";
 
   interface Props {
     open: boolean;
@@ -31,12 +33,40 @@
   });
   let loading = $state(false);
   let saving = $state(false);
+  let reloading = $state(false);
+  let needsReload = $state(false);
   let message = $state("");
   let error = $state("");
 
+  function isLiveState(state: ModelStatus | undefined): boolean {
+    return state === "ready" || state === "starting";
+  }
+  const defaultGrammarArgs = "--grammar-file /app/think.gbnf";
+  const defaultKvCacheArgs = "-ctk q8_0 -ctv q8_0";
+
+  // Rewrites the value of any --cache-type-k/-v or -ctk/-ctv flag to the
+  // requested quant (e.g. q8_0). If no flag is present we fall back to a
+  // sensible default so the button always produces a usable command.
+  function applyKvCacheQuant(quant: string): void {
+    const current = settings.kvCacheArgs ?? "";
+    const flagPattern = /(--cache-type-[kv]|-ct[kv])(\s+|=)(\S+)/g;
+    if (flagPattern.test(current)) {
+      flagPattern.lastIndex = 0;
+      settings.kvCacheArgs = current.replace(flagPattern, (_m, flag, sep) => `${flag}${sep}${quant}`);
+      return;
+    }
+    settings.kvCacheArgs = `-ctk ${quant} -ctv ${quant}`;
+  }
+
   $effect(() => {
     if (!open) return;
+    needsReload = false;
     void loadConfigs();
+  });
+
+  $effect(() => {
+    void modelId;
+    needsReload = false;
   });
 
   $effect(() => {
@@ -59,13 +89,20 @@
 
   async function save(): Promise<void> {
     if (!activeConfig?.editable) return;
+    const wasLive = isLiveState(activeConfig?.state);
     saving = true;
     message = "";
     error = "";
     try {
       const updated = await saveModelConfigSettings(modelId, settings);
       configs = configs.map((config) => (config.modelId === modelId ? updated : config));
-      message = "Saved. Applies on next load.";
+      if (wasLive || isLiveState(updated.state)) {
+        needsReload = true;
+        message = "";
+      } else {
+        needsReload = false;
+        message = "Saved. Applies on next load.";
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : "Failed to save settings";
     } finally {
@@ -74,6 +111,7 @@
   }
 
   async function reset(): Promise<void> {
+    const wasLive = isLiveState(activeConfig?.state);
     saving = true;
     message = "";
     error = "";
@@ -81,11 +119,38 @@
       const updated = await resetModelConfigSettings(modelId);
       configs = configs.map((config) => (config.modelId === modelId ? updated : config));
       settings = { ...updated.effective };
-      message = "Reset. Base config applies on next load.";
+      if (wasLive || isLiveState(updated.state)) {
+        needsReload = true;
+        message = "";
+      } else {
+        needsReload = false;
+        message = "Reset. Base config applies on next load.";
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : "Failed to reset settings";
     } finally {
       saving = false;
+    }
+  }
+
+  // Cycle the model so the freshly-saved settings take effect immediately.
+  // Stop first, then start; the load endpoint is idempotent if the model is
+  // already running, so the explicit unload guarantees a fresh process.
+  async function reloadModelNow(): Promise<void> {
+    reloading = true;
+    message = "";
+    error = "";
+    try {
+      if (isLiveState(activeConfig?.state)) {
+        await unloadSingleModel(modelId);
+      }
+      await loadModel(modelId);
+      needsReload = false;
+      message = "Model reloaded with the latest settings.";
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Failed to reload model";
+    } finally {
+      reloading = false;
     }
   }
 
@@ -199,6 +264,26 @@
           </div>
         {:else}
           <div class="grid gap-4">
+            {#if needsReload}
+              <div class="flex flex-wrap items-start gap-3 rounded-sm border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+                <div class="flex-1 min-w-[12rem]">
+                  <div class="font-mono text-[10px] font-bold uppercase tracking-widest">Reload required</div>
+                  <p class="mt-0.5 text-xs leading-relaxed">
+                    This model is currently loaded. Reload it now so your saved settings take effect on the next request.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="btn flex items-center gap-2 border-warning/50 text-warning hover:border-warning hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  onclick={reloadModelNow}
+                  disabled={reloading}
+                >
+                  <RefreshCw class="h-4 w-4 {reloading ? 'animate-spin' : ''}" />
+                  {reloading ? "Reloading" : "Reload now"}
+                </button>
+              </div>
+            {/if}
+
             <label class="field">
               <span>Alias</span>
               <input
@@ -223,26 +308,63 @@
               <textarea bind:value={settings.serverArgs} class="textarea" rows="4" spellcheck="false"></textarea>
             </label>
 
-            <label class="field">
-              <span>KV cache args</span>
-              <textarea bind:value={settings.kvCacheArgs} class="textarea" rows="3" spellcheck="false"></textarea>
-            </label>
+            <div class="field">
+              <div class="flex items-center justify-between gap-2">
+                <label for="kvCacheArgs" class="field-label">KV cache args</label>
+                <div class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    class="cursor-pointer rounded-[2px] border border-border bg-black px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white"
+                    onclick={() => applyKvCacheQuant("q4_0")}
+                    title="Set cache quant to q4_0"
+                  >
+                    Q4
+                  </button>
+                  <button
+                    type="button"
+                    class="cursor-pointer rounded-[2px] border border-border bg-black px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white"
+                    onclick={() => applyKvCacheQuant("q8_0")}
+                    title="Set cache quant to q8_0"
+                  >
+                    Q8
+                  </button>
+                </div>
+              </div>
+              <textarea
+                id="kvCacheArgs"
+                bind:value={settings.kvCacheArgs}
+                class="textarea"
+                rows="3"
+                spellcheck="false"
+                placeholder={`e.g. ${defaultKvCacheArgs}`}
+              ></textarea>
+            </div>
 
             <label class="field">
               <span>Sampling args</span>
               <textarea bind:value={settings.samplingArgs} class="textarea" rows="3" spellcheck="false"></textarea>
             </label>
 
-            <label class="field">
-              <span>Grammar args</span>
+            <div class="field">
+              <div class="flex items-center justify-between gap-2">
+                <label for="grammarArgs" class="field-label">Grammar args</label>
+                <button
+                  type="button"
+                  class="cursor-pointer rounded-[2px] border border-border bg-black px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white"
+                  onclick={() => (settings.grammarArgs = defaultGrammarArgs)}
+                >
+                  default
+                </button>
+              </div>
               <textarea
+                id="grammarArgs"
                 bind:value={settings.grammarArgs}
                 class="textarea"
                 rows="2"
                 spellcheck="false"
                 placeholder="e.g. --grammar-file /app/think.gbnf"
               ></textarea>
-            </label>
+            </div>
 
             <div class="rounded-sm border border-border bg-black/40 px-3 py-2">
               <div class="mb-1 font-mono text-[10px] uppercase tracking-widest text-txtsecondary">Generated command</div>
@@ -294,7 +416,8 @@
     gap: 0.5rem;
   }
 
-  .field > span:first-of-type {
+  .field > span:first-of-type,
+  .field-label {
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 700;
