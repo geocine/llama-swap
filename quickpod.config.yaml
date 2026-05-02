@@ -27,66 +27,6 @@ macros:
     --grammar-file /app/think.gbnf
 
 models:
-  qwen35-27b:
-    cmd: >
-      ${LLAMA_SERVER}
-      -hf unsloth/Qwen3.5-27B-GGUF:Q4_K_M
-      --port ${PORT}
-      --alias ${MODEL_ID}
-      ${SERVER_ARGS}
-      ${KV_CACHE_Q4_ARGS}
-      ${DENSE_SAMPLING_ARGS}
-
-  qwen35-27b-opus46:
-    cmd: >
-      ${LLAMA_SERVER}
-      -hf Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF:Q4_K_M
-      --port ${PORT}
-      --alias ${MODEL_ID}
-      ${SERVER_ARGS}
-      ${KV_CACHE_Q4_ARGS}
-      ${DENSE_SAMPLING_ARGS}
-
-  qwen35-27b-uncensored:
-    cmd: >
-      ${LLAMA_SERVER}
-      -hf HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive:Q4_K_M
-      --port ${PORT}
-      --alias ${MODEL_ID}
-      ${SERVER_ARGS}
-      ${KV_CACHE_Q4_ARGS}
-      ${DENSE_SAMPLING_ARGS}
-    
-  qwen35-35b-a3b:
-    cmd: >
-      ${LLAMA_SERVER}
-      -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL
-      --port ${PORT}
-      --alias ${MODEL_ID}
-      ${SERVER_ARGS}
-      ${KV_CACHE_Q4_ARGS}
-      ${MOE_SAMPLING_ARGS}
-
-  qwen35-35b-a3b-opus46:
-    cmd: >
-      ${LLAMA_SERVER}
-      -hf mradermacher/Qwen3.5-35B-A3B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:IQ4_XS
-      --port ${PORT}
-      --alias ${MODEL_ID}
-      ${SERVER_ARGS}
-      ${KV_CACHE_Q4_ARGS}
-      ${MOE_SAMPLING_ARGS}
-
-  qwen35-35b-a3b-uncensored:
-    cmd: >
-      ${LLAMA_SERVER}
-      -hf HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ4_XS
-      --port ${PORT}
-      --alias ${MODEL_ID}
-      ${SERVER_ARGS}
-      ${KV_CACHE_Q4_ARGS}
-      ${MOE_SAMPLING_ARGS}
-    
   qwen36-27b:
     cmd: >
       ${LLAMA_SERVER}
@@ -143,6 +83,66 @@ models:
     cmd: >
       ${LLAMA_SERVER}
       -hf H-hf HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ4_XS
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${SERVER_ARGS}
+      ${KV_CACHE_Q4_ARGS}
+      ${MOE_SAMPLING_ARGS}
+      
+  qwen35-27b:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-27B-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${SERVER_ARGS}
+      ${KV_CACHE_Q4_ARGS}
+      ${DENSE_SAMPLING_ARGS}
+
+  qwen35-27b-opus46:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${SERVER_ARGS}
+      ${KV_CACHE_Q4_ARGS}
+      ${DENSE_SAMPLING_ARGS}
+
+  qwen35-27b-uncensored:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive:Q4_K_M
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${SERVER_ARGS}
+      ${KV_CACHE_Q4_ARGS}
+      ${DENSE_SAMPLING_ARGS}
+    
+  qwen35-35b-a3b:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${SERVER_ARGS}
+      ${KV_CACHE_Q4_ARGS}
+      ${MOE_SAMPLING_ARGS}
+
+  qwen35-35b-a3b-opus46:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf mradermacher/Qwen3.5-35B-A3B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:IQ4_XS
+      --port ${PORT}
+      --alias ${MODEL_ID}
+      ${SERVER_ARGS}
+      ${KV_CACHE_Q4_ARGS}
+      ${MOE_SAMPLING_ARGS}
+
+  qwen35-35b-a3b-uncensored:
+    cmd: >
+      ${LLAMA_SERVER}
+      -hf HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ4_XS
       --port ${PORT}
       --alias ${MODEL_ID}
       ${SERVER_ARGS}
