@@ -1,11 +1,20 @@
 <script lang="ts">
-  import { models, downloadProgress, loadModel, unloadAllModels, unloadSingleModel } from "../stores/api";
+  import {
+    models,
+    downloadProgress,
+    loadModel,
+    unloadAllModels,
+    unloadSingleModel,
+    listModelConfigSettings,
+    deleteModelEntry,
+  } from "../stores/api";
   import { isNarrow } from "../stores/theme";
   import { persistentStore } from "../stores/persistent";
+  import { confirmDialog } from "../stores/confirm";
   import type { Model } from "../lib/types";
   import ModelConfigDialog from "./ModelConfigDialog.svelte";
   import ConfigImportExport from "./config/ConfigImportExport.svelte";
-  import { LoaderCircle, Settings } from "lucide-svelte";
+  import { LoaderCircle, Settings, Trash2 } from "lucide-svelte";
 
   let isUnloading = $state(false);
   let menuOpen = $state(false);
@@ -13,6 +22,29 @@
   let configOpen = $state(false);
   let configStatus = $state<{ message: string; kind: "info" | "error" } | null>(null);
   let configStatusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Track which models were created at runtime (via Duplicate). These are the
+  // only ones we let the user delete from the row, since YAML-defined models
+  // would just come back the next time the config reloads. The set is
+  // refreshed whenever the models list changes — duplicate/delete operations
+  // emit ConfigFileChangedEvent which triggers a fresh /v1/models push, so
+  // depending on $models keeps this in lock-step with the backend.
+  let userAddedIds = $state(new Set<string>());
+  let deletingIds = $state(new Set<string>());
+
+  async function refreshUserAddedIds(): Promise<void> {
+    try {
+      const configs = await listModelConfigSettings();
+      userAddedIds = new Set(configs.filter((c) => c.userAdded).map((c) => c.modelId));
+    } catch (err) {
+      console.error("Failed to load user-added model list", err);
+    }
+  }
+
+  $effect(() => {
+    void $models;
+    void refreshUserAddedIds();
+  });
 
   function setConfigStatus(message: string, kind: "info" | "error") {
     if (configStatusTimer) clearTimeout(configStatusTimer);
@@ -97,6 +129,34 @@
   function openConfig(modelId: string): void {
     configModelId = modelId;
     configOpen = true;
+  }
+
+  // Delete a runtime-added model from the row. We confirm first because the
+  // backend stops any running process and removes the persisted entry from
+  // SQLite — there's no undo. Only invoked for ids in userAddedIds so we
+  // never offer this for YAML-defined models.
+  async function handleDelete(modelId: string): Promise<void> {
+    const ok = await confirmDialog({
+      title: "Delete model",
+      message: `Delete "${modelId}"? This stops any running process for the model and removes its session settings. This cannot be undone.`,
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
+
+    deletingIds = new Set(deletingIds).add(modelId);
+    try {
+      await deleteModelEntry(modelId);
+      setConfigStatus(`Deleted "${modelId}".`, "info");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete model";
+      setConfigStatus(message, "error");
+    } finally {
+      const next = new Set(deletingIds);
+      next.delete(modelId);
+      deletingIds = next;
+    }
   }
 </script>
 
@@ -262,6 +322,21 @@
             <td class="w-56">
               <!-- Action + state are twin chips: identical height, text size, and gap on every row -->
               <div class="flex items-center justify-end gap-2">
+                {#if userAddedIds.has(model.id)}
+                  <button
+                    class="status w-8 border-border text-error/70 transition-colors duration-150 hover:border-error hover:text-error cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                    onclick={() => handleDelete(model.id)}
+                    disabled={deletingIds.has(model.id)}
+                    title="Delete duplicated model"
+                    aria-label={`Delete ${model.id}`}
+                  >
+                    {#if deletingIds.has(model.id)}
+                      <LoaderCircle class="h-3.5 w-3.5 animate-spin" />
+                    {:else}
+                      <Trash2 class="h-3.5 w-3.5" />
+                    {/if}
+                  </button>
+                {/if}
                 <button
                   class="status w-8 border-border text-txtsecondary transition-colors duration-150 hover:border-border-hover hover:text-white cursor-pointer"
                   onclick={() => openConfig(model.id)}
@@ -339,6 +414,11 @@
   open={configOpen}
   modelId={configModelId}
   onClose={() => (configOpen = false)}
+  onModelChanged={(newId) => {
+    if (newId) {
+      configModelId = newId;
+    }
+  }}
 />
 
 <style>

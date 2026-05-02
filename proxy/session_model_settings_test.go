@@ -37,6 +37,7 @@ func TestProxyManager_SessionModelSettingsExtractsEditableCommandParts(t *testin
 	require.NoError(t, err)
 
 	assert.Equal(t, "org/model:Q4_K_M", settings.Source)
+	assert.Equal(t, "model1", settings.Alias)
 	assert.Equal(t, "-ngl 99 -c 4096", settings.ServerArgs)
 	assert.Equal(t, "--cache-type-k q4_0 --cache-type-v q4_0", settings.KVCacheArgs)
 	assert.Equal(t, "--temp 0.7 --top-p 0.8", settings.SamplingArgs)
@@ -45,6 +46,46 @@ func TestProxyManager_SessionModelSettingsExtractsEditableCommandParts(t *testin
 	assert.Equal(t, "19000", meta.PortValue)
 	assert.Equal(t, "--alias", meta.AliasFlag)
 	assert.Equal(t, "model1", meta.AliasValue)
+}
+
+// TestProxyManager_SessionModelSettingsAlias verifies that the alias is
+// surfaced as an editable field, that overrides round-trip through the rebuilt
+// cmd, and that an empty alias falls back to the base value.
+func TestProxyManager_SessionModelSettingsAlias(t *testing.T) {
+	cfg := testEditableConfig(t)
+	proxy := New(cfg)
+	defer proxy.Shutdown()
+
+	updated, err := proxy.saveSessionModelSettings("model1", SessionModelSettings{
+		Alias:        "qwen-fast",
+		Source:       "org/model:Q4_K_M",
+		ServerArgs:   "-ngl 99 -c 4096",
+		KVCacheArgs:  "--cache-type-k q4_0 --cache-type-v q4_0",
+		SamplingArgs: "--temp 0.7 --top-p 0.8",
+		GrammarArgs:  "--grammar-file /app/think.gbnf",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.Override)
+	assert.Equal(t, "qwen-fast", updated.Effective.Alias)
+	assert.Contains(t, updated.Command, "--alias qwen-fast")
+
+	effective, ok := proxy.effectiveModelConfig("model1")
+	require.True(t, ok)
+	assert.Contains(t, effective.Cmd, "--alias qwen-fast")
+
+	// An empty alias on save should resolve back to the base value (here
+	// equal to the model id).
+	cleared, err := proxy.saveSessionModelSettings("model1", SessionModelSettings{
+		Alias:        "",
+		Source:       "org/model:Q4_K_M",
+		ServerArgs:   "-ngl 99 -c 4096",
+		KVCacheArgs:  "--cache-type-k q4_0 --cache-type-v q4_0",
+		SamplingArgs: "--temp 0.7 --top-p 0.8",
+		GrammarArgs:  "--grammar-file /app/think.gbnf",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "model1", cleared.Effective.Alias)
+	assert.Contains(t, cleared.Command, "--alias model1")
 }
 
 func TestProxyManager_SessionModelSettingsAPI(t *testing.T) {

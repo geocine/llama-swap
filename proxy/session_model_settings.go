@@ -16,6 +16,11 @@ import (
 )
 
 type SessionModelSettings struct {
+	// Alias is the value passed to the upstream server's --alias flag (or
+	// equivalent). Defaults to the value already in the base cmd, which is
+	// usually the model id thanks to the ${MODEL_ID} macro. An empty value
+	// on save is treated as "use the base alias".
+	Alias        string `json:"alias" yaml:"alias"`
 	Source       string `json:"source" yaml:"source"`
 	ServerArgs   string `json:"serverArgs" yaml:"serverArgs"`
 	KVCacheArgs  string `json:"kvCacheArgs" yaml:"kvCacheArgs"`
@@ -36,6 +41,12 @@ type EditableModelConfig struct {
 	Editable  bool                  `json:"editable"`
 	Message   string                `json:"message,omitempty"`
 	Command   string                `json:"command"`
+	// UserAdded is true when the model was created at runtime via the
+	// Duplicate UI rather than read from the YAML config file.
+	// SourceModelID records which model was duplicated (if any), purely
+	// for display.
+	UserAdded     bool   `json:"userAdded"`
+	SourceModelID string `json:"sourceModelId,omitempty"`
 }
 
 type configImportResult struct {
@@ -86,6 +97,7 @@ func newSessionModelSettingsStore(dbPath string) (*sessionModelSettingsStore, er
 			kv_cache_args TEXT NOT NULL,
 			sampling_args TEXT NOT NULL,
 			grammar_args TEXT NOT NULL DEFAULT '',
+			alias TEXT NOT NULL DEFAULT '',
 			updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 		)
 	`); err != nil {
@@ -93,11 +105,31 @@ func newSessionModelSettingsStore(dbPath string) (*sessionModelSettingsStore, er
 		return nil, err
 	}
 
-	// Migrate older databases that pre-date the grammar_args column. SQLite
-	// has no native "ADD COLUMN IF NOT EXISTS"; we rely on the duplicate-column
+	// Migrate older databases that pre-date newer columns. SQLite has no
+	// native "ADD COLUMN IF NOT EXISTS"; we rely on the duplicate-column
 	// error to short-circuit on already-migrated databases.
-	if _, err := db.Exec(`ALTER TABLE session_model_settings ADD COLUMN grammar_args TEXT NOT NULL DEFAULT ''`); err != nil &&
-		!strings.Contains(err.Error(), "duplicate column name") {
+	for _, stmt := range []string{
+		`ALTER TABLE session_model_settings ADD COLUMN grammar_args TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_model_settings ADD COLUMN alias TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, err
+		}
+	}
+
+	// Companion table for models created at runtime via the Duplicate UI.
+	// Each row holds the YAML-serialized ModelConfig that should be merged
+	// into the proxy's model map at startup, plus the group it joins.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS user_added_models (
+			model_id TEXT PRIMARY KEY,
+			source_model_id TEXT NOT NULL,
+			group_id TEXT NOT NULL DEFAULT '',
+			config_yaml TEXT NOT NULL,
+			created_at INTEGER NOT NULL DEFAULT (unixepoch())
+		)
+	`); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -121,10 +153,10 @@ func (s *sessionModelSettingsStore) get(modelID string) (SessionModelSettings, b
 
 	var settings SessionModelSettings
 	err := s.db.QueryRow(`
-		SELECT source, server_args, kv_cache_args, sampling_args, grammar_args
+		SELECT source, server_args, kv_cache_args, sampling_args, grammar_args, alias
 		FROM session_model_settings
 		WHERE model_id = ?
-	`, modelID).Scan(&settings.Source, &settings.ServerArgs, &settings.KVCacheArgs, &settings.SamplingArgs, &settings.GrammarArgs)
+	`, modelID).Scan(&settings.Source, &settings.ServerArgs, &settings.KVCacheArgs, &settings.SamplingArgs, &settings.GrammarArgs, &settings.Alias)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionModelSettings{}, false, nil
 	}
@@ -143,16 +175,17 @@ func (s *sessionModelSettingsStore) save(modelID string, settings SessionModelSe
 
 	_, err := s.db.Exec(`
 		INSERT INTO session_model_settings
-			(model_id, source, server_args, kv_cache_args, sampling_args, grammar_args, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, unixepoch())
+			(model_id, source, server_args, kv_cache_args, sampling_args, grammar_args, alias, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
 		ON CONFLICT(model_id) DO UPDATE SET
 			source = excluded.source,
 			server_args = excluded.server_args,
 			kv_cache_args = excluded.kv_cache_args,
 			sampling_args = excluded.sampling_args,
 			grammar_args = excluded.grammar_args,
+			alias = excluded.alias,
 			updated_at = unixepoch()
-	`, modelID, settings.Source, settings.ServerArgs, settings.KVCacheArgs, settings.SamplingArgs, settings.GrammarArgs)
+	`, modelID, settings.Source, settings.ServerArgs, settings.KVCacheArgs, settings.SamplingArgs, settings.GrammarArgs, settings.Alias)
 	return err
 }
 
@@ -208,6 +241,11 @@ func (pm *ProxyManager) editableModelConfig(modelID string) (EditableModelConfig
 		if found {
 			overridePtr = &override
 			effective = override
+			// An empty alias in a stored override means "use the base alias",
+			// so resolve it here for display in the UI.
+			if effective.Alias == "" {
+				effective.Alias = base.Alias
+			}
 		}
 	}
 
@@ -223,15 +261,25 @@ func (pm *ProxyManager) editableModelConfig(modelID string) (EditableModelConfig
 		}
 	}
 
+	userAdded, sourceID := false, ""
+	if pm.sessionModelSettings != nil {
+		if record, found, _ := pm.sessionModelSettings.getUserAddedModel(modelID); found {
+			userAdded = true
+			sourceID = record.SourceModelID
+		}
+	}
+
 	return EditableModelConfig{
-		ModelID:   modelID,
-		State:     state,
-		Base:      base,
-		Override:  overridePtr,
-		Effective: effective,
-		Editable:  editable,
-		Message:   message,
-		Command:   command,
+		ModelID:       modelID,
+		State:         state,
+		Base:          base,
+		Override:      overridePtr,
+		Effective:     effective,
+		Editable:      editable,
+		Message:       message,
+		Command:       command,
+		UserAdded:     userAdded,
+		SourceModelID: sourceID,
 	}, nil
 }
 
@@ -352,6 +400,7 @@ type sessionCommandMeta struct {
 
 func normalizeSessionModelSettings(settings SessionModelSettings) SessionModelSettings {
 	return SessionModelSettings{
+		Alias:        strings.TrimSpace(settings.Alias),
 		Source:       strings.TrimSpace(settings.Source),
 		ServerArgs:   strings.TrimSpace(settings.ServerArgs),
 		KVCacheArgs:  strings.TrimSpace(settings.KVCacheArgs),
@@ -435,6 +484,10 @@ func extractSessionModelSettings(modelConfig config.ModelConfig) (SessionModelSe
 		return SessionModelSettings{}, meta, fmt.Errorf("command does not include an editable -hf source")
 	}
 
+	// Surface the alias as part of the editable settings so the UI can show
+	// and override it. The original flag form (--alias / -a) is retained on
+	// `meta` so we can re-emit it in the same shape.
+	settings.Alias = meta.AliasValue
 	settings.ServerArgs = strings.Join(serverArgs, " ")
 	settings.KVCacheArgs = strings.Join(kvArgs, " ")
 	settings.SamplingArgs = strings.Join(samplingArgs, " ")
@@ -454,6 +507,15 @@ func applySessionModelSettings(modelConfig config.ModelConfig, settings SessionM
 	if strings.ContainsAny(settings.Source, " \t\r\n") {
 		return config.ModelConfig{}, fmt.Errorf("source cannot contain whitespace")
 	}
+	// An empty alias on save means "use whatever the base cmd already had".
+	// Aliases must not contain whitespace because they map directly onto a
+	// single argv slot in the upstream command.
+	if settings.Alias == "" {
+		settings.Alias = base.Alias
+	}
+	if strings.ContainsAny(settings.Alias, " \t\r\n") {
+		return config.ModelConfig{}, fmt.Errorf("alias cannot contain whitespace")
+	}
 
 	nextConfig := modelConfig
 	nextConfig.Cmd = buildSessionModelCommand(meta, settings)
@@ -472,8 +534,19 @@ func buildSessionModelCommand(meta sessionCommandMeta, settings SessionModelSett
 	if meta.PortFlag != "" && meta.PortValue != "" {
 		args = append(args, meta.PortFlag, meta.PortValue)
 	}
-	if meta.AliasFlag != "" && meta.AliasValue != "" {
-		args = append(args, meta.AliasFlag, meta.AliasValue)
+	// Prefer the override on settings.Alias; otherwise fall back to the value
+	// the base cmd carried (preserved on `meta`). When the base had no alias
+	// flag at all and the user adds one, default to the long form `--alias`.
+	aliasValue := settings.Alias
+	if aliasValue == "" {
+		aliasValue = meta.AliasValue
+	}
+	if aliasValue != "" {
+		flag := meta.AliasFlag
+		if flag == "" {
+			flag = "--alias"
+		}
+		args = append(args, flag, aliasValue)
 	}
 	args = append(args, splitCommandSegment(settings.ServerArgs)...)
 	args = append(args, splitCommandSegment(settings.KVCacheArgs)...)

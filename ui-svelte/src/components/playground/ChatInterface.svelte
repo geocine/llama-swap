@@ -177,6 +177,24 @@
     return () => clearInterval(timer);
   });
 
+  // Return focus to the composer once the response (or compaction) finishes.
+  // While the textarea is disabled, focus drops to `document.body`, which makes
+  // the input feel "stuck" until the user clicks back. We only steal focus when
+  // nothing else is focused, so manual interactions elsewhere are respected.
+  let lastInputBusy = false;
+  $effect(() => {
+    const busy = isStreaming || isCompacting;
+    if (lastInputBusy && !busy) {
+      requestAnimationFrame(() => {
+        if (!textareaEl || textareaEl.disabled) return;
+        const active = document.activeElement;
+        if (active && active !== document.body && active !== textareaEl) return;
+        textareaEl.focus();
+      });
+    }
+    lastInputBusy = busy;
+  });
+
   function handleScroll() {
     if (!scrollContainer) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
@@ -782,6 +800,11 @@
   open={showModelConfig}
   modelId={selectedModelInfo?.id ?? ""}
   onClose={() => (showModelConfig = false)}
+  onModelChanged={(newId) => {
+    if (newId) {
+      $selectedModelStore = newId;
+    }
+  }}
 />
 
 {#snippet composer()}

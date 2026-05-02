@@ -134,20 +134,27 @@ func (pm *ProxyManager) applySessionOverridesToDoc(doc *yaml.Node) error {
 
 // renderExportCmd builds the cmd string for an overridden model in a form
 // suitable for writing back to a config document. The model's resolved port
-// and alias are restored to their ${PORT} and ${MODEL_ID} placeholders so
-// the exported YAML stays portable and re-importable across hosts.
+// is restored to ${PORT}, and an unchanged alias is restored to ${MODEL_ID},
+// so the exported YAML stays portable and re-importable across hosts. A
+// custom alias is emitted verbatim so it round-trips correctly.
 func renderExportCmd(baseCfg config.ModelConfig, override SessionModelSettings) (string, error) {
-	_, meta, err := extractSessionModelSettings(baseCfg)
+	base, meta, err := extractSessionModelSettings(baseCfg)
 	if err != nil {
 		return "", err
 	}
 	if meta.PortValue != "" {
 		meta.PortValue = "${PORT}"
 	}
-	if meta.AliasValue != "" {
-		meta.AliasValue = "${MODEL_ID}"
+
+	override = normalizeSessionModelSettings(override)
+	if override.Alias == "" || override.Alias == base.Alias {
+		// The override doesn't change the alias, so keep the placeholder.
+		override.Alias = ""
+		if meta.AliasValue != "" {
+			meta.AliasValue = "${MODEL_ID}"
+		}
 	}
-	return buildSessionModelCommand(meta, normalizeSessionModelSettings(override)), nil
+	return buildSessionModelCommand(meta, override), nil
 }
 
 // mappingValue returns the value node for `key` inside a mapping node, or nil

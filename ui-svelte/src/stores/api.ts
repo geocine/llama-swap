@@ -371,6 +371,27 @@ export async function resetModelConfigSettings(modelId: string): Promise<Editabl
   return (await response.json()) as EditableModelConfig;
 }
 
+export async function duplicateModelConfig(modelId: string): Promise<EditableModelConfig> {
+  const response = await apiFetch(`/api/config/models/${encodeURIComponent(modelId)}/duplicate`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to duplicate model: ${response.status} ${message}`);
+  }
+  return (await response.json()) as EditableModelConfig;
+}
+
+export async function deleteModelEntry(modelId: string): Promise<void> {
+  const response = await apiFetch(`/api/config/models/${encodeURIComponent(modelId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to delete model: ${response.status} ${message}`);
+  }
+}
+
 export async function downloadModelConfigSettings(): Promise<void> {
   const response = await apiFetch("/api/config/export");
   if (!response.ok) {

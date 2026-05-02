@@ -1,23 +1,28 @@
 <script lang="ts">
   import {
+    deleteModelEntry,
+    duplicateModelConfig,
     listModelConfigSettings,
     resetModelConfigSettings,
     saveModelConfigSettings,
   } from "../stores/api";
+  import { confirmDialog } from "../stores/confirm";
   import type { EditableModelConfig, SessionModelSettings } from "../lib/types";
-  import { RotateCcw, Save, X } from "lucide-svelte";
+  import { Copy, RotateCcw, Save, Trash2, X } from "lucide-svelte";
 
   interface Props {
     open: boolean;
     modelId: string;
     onClose: () => void;
+    onModelChanged?: (newModelId: string) => void;
   }
 
-  let { open, modelId, onClose }: Props = $props();
+  let { open, modelId, onClose, onModelChanged }: Props = $props();
 
   let configs = $state<EditableModelConfig[]>([]);
   let activeConfig = $derived(configs.find((config) => config.modelId === modelId) ?? null);
   let settings = $state<SessionModelSettings>({
+    alias: "",
     source: "",
     serverArgs: "",
     kvCacheArgs: "",
@@ -84,6 +89,55 @@
     }
   }
 
+  // Duplicate clones the active model into a freshly named entry on the
+  // backend and immediately switches the dialog to the new id so the user
+  // can tweak it (alias, source, etc.) without re-opening anything.
+  async function duplicate(): Promise<void> {
+    if (!activeConfig) return;
+    saving = true;
+    message = "";
+    error = "";
+    try {
+      const created = await duplicateModelConfig(modelId);
+      configs = [...configs.filter((config) => config.modelId !== created.modelId), created];
+      message = `Duplicated as "${created.modelId}".`;
+      onModelChanged?.(created.modelId);
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Failed to duplicate model";
+    } finally {
+      saving = false;
+    }
+  }
+
+  // Delete is only available for user-added (duplicated) models. We confirm
+  // first because the operation also tears down any running process for the
+  // entry and removes its session overrides.
+  async function deleteEntry(): Promise<void> {
+    if (!activeConfig?.userAdded) return;
+    const ok = await confirmDialog({
+      title: "Delete model",
+      message: `Delete "${modelId}"? This stops any running process for the model and removes its session settings. This cannot be undone.`,
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
+
+    saving = true;
+    message = "";
+    error = "";
+    try {
+      await deleteModelEntry(modelId);
+      configs = configs.filter((config) => config.modelId !== modelId);
+      onModelChanged?.("");
+      onClose();
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Failed to delete model";
+    } finally {
+      saving = false;
+    }
+  }
+
   function backdropClick(event: MouseEvent): void {
     if (event.target === event.currentTarget) {
       onClose();
@@ -96,10 +150,38 @@
     <div class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-sm border border-border bg-surface shadow-2xl shadow-black">
       <div class="flex items-center gap-3 border-b border-border px-4 py-3">
         <div class="min-w-0">
-          <div class="font-mono text-[10px] uppercase tracking-widest text-txtsecondary">Model config</div>
-          <h2 class="truncate text-base font-bold text-txtmain">{modelId}</h2>
+          <div class="font-mono text-[10px] uppercase tracking-widest text-txtsecondary">
+            Model config{#if activeConfig?.userAdded}
+              {" \u00B7 "}<span class="text-success">duplicated{activeConfig.sourceModelId
+                ? ` from ${activeConfig.sourceModelId}`
+                : ""}</span>
+            {/if}
+          </div>
+          <h2 class="truncate text-base font-bold text-txtmain">
+            {settings.alias.trim() || modelId}
+          </h2>
         </div>
         <div class="ml-auto flex items-center gap-2">
+          <button
+            class="btn p-2"
+            onclick={duplicate}
+            disabled={!activeConfig?.editable || saving}
+            title="Duplicate this model"
+            aria-label="Duplicate this model"
+          >
+            <Copy class="h-4 w-4" />
+          </button>
+          {#if activeConfig?.userAdded}
+            <button
+              class="btn p-2 text-error"
+              onclick={deleteEntry}
+              disabled={saving}
+              title="Delete this duplicated model"
+              aria-label="Delete this duplicated model"
+            >
+              <Trash2 class="h-4 w-4" />
+            </button>
+          {/if}
           <button class="btn p-2" onclick={onClose} title="Close" aria-label="Close">
             <X class="h-4 w-4" />
           </button>
@@ -117,6 +199,20 @@
           </div>
         {:else}
           <div class="grid gap-4">
+            <label class="field">
+              <span>Alias</span>
+              <input
+                bind:value={settings.alias}
+                class="input"
+                spellcheck="false"
+                placeholder={modelId}
+              />
+              <span class="hint">
+                Name reported by the upstream server (passed via <code>--alias</code>).
+                Leave blank to keep the base value.
+              </span>
+            </label>
+
             <label class="field">
               <span>HF source</span>
               <input bind:value={settings.source} class="input" spellcheck="false" />
@@ -198,13 +294,32 @@
     gap: 0.5rem;
   }
 
-  .field span {
+  .field > span:first-of-type {
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--color-txtsecondary);
+  }
+
+  .field .hint {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: normal;
+    text-transform: none;
+    color: var(--color-txtsecondary);
+    line-height: 1.5;
+  }
+
+  .field .hint code {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    background: #000000;
+    border: 1px solid var(--color-border);
+    border-radius: 2px;
+    padding: 0 4px;
   }
 
   .input,

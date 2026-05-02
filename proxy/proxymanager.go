@@ -188,6 +188,12 @@ func New(proxyConfig config.Config) *ProxyManager {
 		proxyLogger.Warnf("failed to initialize session model settings sqlite database %q: %v; model config editing disabled", proxyConfig.CaptureDBPath, err)
 	}
 
+	// Merge any models that were created at runtime via the Duplicate UI
+	// before the process groups are built so they participate in normal
+	// per-group lifecycle (and the YAML-defined entries always take
+	// precedence on id collisions).
+	mergeUserAddedModels(&proxyConfig, sessionModelSettings, proxyLogger)
+
 	pm := &ProxyManager{
 		config:    proxyConfig,
 		ginEngine: gin.New(),

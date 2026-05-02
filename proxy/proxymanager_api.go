@@ -43,6 +43,8 @@ func addApiHandlers(pm *ProxyManager) {
 		apiGroup.GET("/config/models", pm.apiGetModelConfigs)
 		apiGroup.PUT("/config/models/:model/settings", pm.apiPutModelConfigSettings)
 		apiGroup.DELETE("/config/models/:model/settings", pm.apiDeleteModelConfigSettings)
+		apiGroup.POST("/config/models/:model/duplicate", pm.apiDuplicateModelConfig)
+		apiGroup.DELETE("/config/models/:model", pm.apiDeleteModelEntry)
 		apiGroup.GET("/config/export", pm.apiExportModelConfigSettings)
 		apiGroup.POST("/config/import", pm.apiImportModelConfigSettings)
 		apiGroup.GET("/events", pm.apiSendEvents)
@@ -252,6 +254,41 @@ func (pm *ProxyManager) apiDeleteModelConfigSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, modelConfig)
+}
+
+func (pm *ProxyManager) apiDuplicateModelConfig(c *gin.Context) {
+	if pm.sessionModelSettings == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session model settings are unavailable"})
+		return
+	}
+	modelID := c.Param("model")
+	modelConfig, err := pm.duplicateModel(modelID)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, modelConfig)
+}
+
+func (pm *ProxyManager) apiDeleteModelEntry(c *gin.Context) {
+	if pm.sessionModelSettings == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session model settings are unavailable"})
+		return
+	}
+	modelID := c.Param("model")
+	if err := pm.deleteModelEntry(modelID); err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": modelID})
 }
 
 func (pm *ProxyManager) apiExportModelConfigSettings(c *gin.Context) {

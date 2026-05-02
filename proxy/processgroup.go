@@ -115,6 +115,57 @@ func (pg *ProcessGroup) HasMember(modelName string) bool {
 	return slices.Contains(pg.config.Groups[pg.id].Members, modelName)
 }
 
+// AddMember registers a runtime-added model with this process group. It mirrors
+// the per-model setup performed in NewProcessGroup: appending to the group's
+// member list and creating a Process for the new entry. Safe to call when the
+// model id is already a member — the call becomes a no-op.
+func (pg *ProcessGroup) AddMember(modelID string, modelConfig config.ModelConfig) {
+	pg.Lock()
+	defer pg.Unlock()
+
+	group := pg.config.Groups[pg.id]
+	if !slices.Contains(group.Members, modelID) {
+		group.Members = append(group.Members, modelID)
+		pg.config.Groups[pg.id] = group
+	}
+
+	if _, exists := pg.processes[modelID]; exists {
+		return
+	}
+	processLogger := NewLogMonitorWriter(pg.upstreamLogger)
+	pg.processes[modelID] = NewProcess(modelID, pg.config.HealthCheckTimeout, modelConfig, processLogger, pg.proxyLogger)
+}
+
+// RemoveMember stops and removes a model from this process group. The
+// associated Process is shut down immediately so any background goroutines
+// don't outlive the entry. No-op when the model is not a member.
+//
+// All mutations to pg.processes, pg.config.Groups and pg.lastUsedProcess are
+// performed under pg.Mutex to avoid racing with ProxyRequest / AddMember,
+// which also touch pg.processes under the same lock. The Process is stopped
+// after releasing the lock so a slow shutdown cannot block other callers
+// (this mirrors the StopImmediately path in StopProcess).
+func (pg *ProcessGroup) RemoveMember(modelID string) {
+	pg.Lock()
+	process, exists := pg.processes[modelID]
+	if !exists {
+		pg.Unlock()
+		return
+	}
+
+	group := pg.config.Groups[pg.id]
+	group.Members = slices.DeleteFunc(group.Members, func(m string) bool { return m == modelID })
+	pg.config.Groups[pg.id] = group
+
+	if pg.lastUsedProcess == modelID {
+		pg.lastUsedProcess = ""
+	}
+	delete(pg.processes, modelID)
+	pg.Unlock()
+
+	process.StopImmediately()
+}
+
 func (pg *ProcessGroup) GetMember(modelName string) (*Process, bool) {
 	if pg.HasMember(modelName) {
 		return pg.processes[modelName], true

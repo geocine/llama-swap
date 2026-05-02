@@ -71,6 +71,7 @@ export interface ModelDownloadProgress {
 }
 
 export interface SessionModelSettings {
+  alias: string;
   source: string;
   serverArgs: string;
   kvCacheArgs: string;
@@ -87,6 +88,8 @@ export interface EditableModelConfig {
   editable: boolean;
   message?: string;
   command: string;
+  userAdded: boolean;
+  sourceModelId?: string;
 }
 
 export interface ConfigImportResult {
