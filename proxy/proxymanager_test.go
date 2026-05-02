@@ -19,6 +19,7 @@ import (
 	"github.com/mostlygeek/llama-swap/event"
 	"github.com/mostlygeek/llama-swap/proxy/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
 
@@ -282,7 +283,8 @@ func TestProxyManager_ListModelsHandler(t *testing.T) {
 
 	// Parse the JSON response
 	var response struct {
-		Data []map[string]interface{} `json:"data"`
+		Data   []map[string]interface{} `json:"data"`
+		Models []map[string]interface{} `json:"models"`
 	}
 
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
@@ -290,6 +292,116 @@ func TestProxyManager_ListModelsHandler(t *testing.T) {
 	}
 
 	// Check the number of models returned (3 local + 2 peer models)
+	assert.Len(t, response.Data, 5)
+	assert.Empty(t, response.Models, "non-Codex model list response should not include Codex metadata")
+}
+
+func TestProxyManager_ListModelsHandler_CodexModelCatalog(t *testing.T) {
+	model1Config := getTestSimpleResponderConfig("model1")
+	model1Config.Name = "Model 1"
+	model1Config.Description = "Model 1 description is used for testing"
+
+	cfg := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": model1Config,
+			"model2": getTestSimpleResponderConfig("model2"),
+		},
+		LogLevel: "error",
+	}
+
+	proxy := New(cfg)
+
+	req := httptest.NewRequest("GET", "/v1/models?client_version=0.128.0", nil)
+	req.Header.Set("User-Agent", "codex-tui/0.128.0")
+	w := CreateTestResponseRecorder()
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Data   []map[string]interface{} `json:"data"`
+		Models []map[string]interface{} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+
+	assert.Len(t, response.Data, 2)
+	assert.Len(t, response.Models, 2)
+
+	var model1Codex map[string]interface{}
+	for _, model := range response.Models {
+		if model["slug"] == "model1" {
+			model1Codex = model
+			break
+		}
+	}
+	if assert.NotNil(t, model1Codex, "codex metadata should include model1") {
+		assert.Equal(t, "model1", model1Codex["slug"])
+		assert.Equal(t, "Model 1", model1Codex["display_name"])
+		assert.Equal(t, "Model 1 description is used for testing", model1Codex["description"])
+		assert.Equal(t, "shell_command", model1Codex["shell_type"])
+		assert.Equal(t, "function", model1Codex["apply_patch_tool_type"])
+		assert.Equal(t, false, model1Codex["supports_reasoning_summaries"])
+		assert.Equal(t, true, model1Codex["supports_parallel_tool_calls"])
+		assert.Equal(t, float64(272000), model1Codex["context_window"])
+	}
+
+	// Check the details of each model
+	expectedModels := map[string]struct{}{
+		"model1": {},
+		"model2": {},
+	}
+
+	// make all models
+	for _, model := range response.Data {
+		modelID, ok := model["id"].(string)
+		assert.True(t, ok, "model ID should be a string")
+		_, exists := expectedModels[modelID]
+		assert.True(t, exists, "unexpected model ID: %s", modelID)
+		delete(expectedModels, modelID)
+	}
+
+	// Ensure all expected models were returned
+	assert.Empty(t, expectedModels, "not all expected models were returned")
+}
+
+func TestProxyManager_ListModelsHandler_OpenAIShape(t *testing.T) {
+	model1Config := getTestSimpleResponderConfig("model1")
+	model1Config.Name = "Model 1"
+	model1Config.Description = "Model 1 description is used for testing"
+
+	model2Config := getTestSimpleResponderConfig("model2")
+	model2Config.Name = "     " // empty whitespace only strings will get ignored
+	model2Config.Description = "  "
+
+	cfg := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": model1Config,
+			"model2": model2Config,
+			"model3": getTestSimpleResponderConfig("model3"),
+		},
+		Peers: map[string]config.PeerConfig{
+			"peer1": {
+				Proxy:  "http://peer1:8080",
+				Models: []string{"peer-model-a", "peer-model-b"},
+			},
+		},
+		LogLevel: "error",
+	}
+
+	proxy := New(cfg)
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	w := CreateTestResponseRecorder()
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	assert.Len(t, response.Data, 5)
 
 	// Check the details of each model
@@ -436,6 +548,50 @@ models:
 	assert.NotNil(t, model2Data)
 	_, exists = model2Data["llamaswap_meta"]
 	assert.False(t, exists, "model2 should not have llamaswap_meta")
+}
+
+func TestProxyManager_ListModelsHandler_CodexMetadataContextWindow(t *testing.T) {
+	config := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"ctx-from-cmd": {
+				Cmd:           "/path/to/llama-server -c 4096",
+				Proxy:         "http://127.0.0.1:9999",
+				CheckEndpoint: "/health",
+			},
+			"ctx-from-meta": {
+				Cmd:           "/path/to/llama-server -c 4096",
+				Proxy:         "http://127.0.0.1:9998",
+				CheckEndpoint: "/health",
+				Metadata: map[string]any{
+					"context_window": 8192,
+				},
+			},
+		},
+		LogLevel: "error",
+	}
+
+	proxy := New(config)
+
+	req := httptest.NewRequest("GET", "/v1/models?client_version=0.128.0", nil)
+	w := CreateTestResponseRecorder()
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Models []map[string]any `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+
+	contextBySlug := map[string]float64{}
+	for _, model := range response.Models {
+		slug, _ := model["slug"].(string)
+		contextBySlug[slug], _ = model["context_window"].(float64)
+	}
+
+	assert.Equal(t, float64(4096), contextBySlug["ctx-from-cmd"])
+	assert.Equal(t, float64(8192), contextBySlug["ctx-from-meta"])
 }
 
 func TestProxyManager_ListModelsHandler_SortedByID(t *testing.T) {
